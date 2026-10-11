@@ -1,0 +1,37 @@
+---
+// The only picture: an engraving of a sailor heaving the lead, dithered to
+// one ink (design/hero/dither.py) at 720x450 and shown at exactly two pixels
+// a dot. The <img> is the picture; where motion is welcome a canvas takes
+// its place and makes every dot a particle (scripts/engraving.ts).
+---
+
+<div class="band">
+  <img
+    class="art"
+    data-engraving
+    src="/hero.png"
+    width="720"
+    height="450"
+    alt="A sailor at a ship's side heaving the lead: casting a sounding line out over a rough sea."
+    fetchpriority="high"
+  />
+  <canvas class="art" data-engraving-live aria-hidden="true" hidden></canvas>
+</div>
+
+<script>
+  import { engrave } from "../scripts/engraving";
+
+  const img = document.querySelector<HTMLImageElement>("[data-engraving]");
+  const canvas = document.querySelector<HTMLCanvasElement>("[data-engraving-live]");
+  if (img && canvas && !matchMedia("(prefers-reduced-motion: reduce)").matches) {
+    img
+      .decode()
+      .then(() => {
+        engrave(img, canvas);
+        canvas.hidden = false;
+        // Clear, not removed: the picture's description still belongs to it.
+        img.style.opacity = "0";
+      })
+      .catch(() => document.documentElement.classList.remove("live"));
+  }
+</script>

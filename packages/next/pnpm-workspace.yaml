@@ -1,0 +1,5 @@
+# sharp (under next, for image optimisation) has an install script that only
+# matters when images are optimised. Nothing here does that, and saying so
+# keeps `pnpm install` from failing on an unapproved build script.
+allowBuilds:
+  sharp: false

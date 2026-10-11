@@ -1,0 +1,43 @@
+---
+import "../styles/global.css";
+
+interface Props {
+  title: string;
+  description: string;
+}
+const { title, description } = Astro.props;
+---
+
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>{title}</title>
+    <meta name="description" content={description} />
+    <meta name="color-scheme" content="light" />
+    <meta name="theme-color" content="#f4f6f9" />
+    <meta property="og:title" content="Leadline: take a sounding of your code" />
+    <meta property="og:description" content={description} />
+    <meta property="og:type" content="website" />
+    <!-- Needs the site's full address in front once there is one (set `site` in astro.config.mjs). -->
+    <meta property="og:image" content="/og.png" />
+    <meta property="og:image:alt" content="Take a sounding of your code. A dithered engraving of a sailor heaving the lead." />
+    <meta name="twitter:card" content="summary_large_image" />
+    <link rel="icon" type="image/svg+xml" href="/favicon.svg" />
+    <link rel="preload" href="/fonts/geist-latin.woff2" as="font" type="font/woff2" crossorigin />
+    <script is:inline>
+      // The engraving comes alive on a canvas (components/Engraving.astro).
+      // Until it has, the still picture is held back, so the line isn't seen
+      // lying where it lands before it has been cast. If the canvas never
+      // comes, the still picture shows after all.
+      if (!matchMedia("(prefers-reduced-motion: reduce)").matches) {
+        document.documentElement.classList.add("live");
+        setTimeout(() => document.documentElement.classList.remove("live"), 3000);
+      }
+    </script>
+  </head>
+  <body>
+    <slot />
+  </body>
+</html>

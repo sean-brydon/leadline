@@ -1,0 +1,20 @@
+{
+  "name": "acme-orders",
+  "version": "0.0.0",
+  "private": true,
+  "description": "A tiny Express and Postgres app, wired to Leadline with @leadline/node.",
+  "type": "module",
+  "scripts": {
+    "db": "docker run -d --name acme-orders-pg -e POSTGRES_USER=acme -e POSTGRES_PASSWORD=acme -e POSTGRES_DB=acme -p 127.0.0.1:5432:5432 postgres:17-alpine",
+    "db:stop": "docker rm -f acme-orders-pg",
+    "dev": "node --import @leadline/node/register server.js",
+    "start": "node server.js"
+  },
+  "dependencies": {
+    "express": "^5.3.0",
+    "pg": "^8.23.1"
+  },
+  "devDependencies": {
+    "@leadline/node": "link:../../packages/node"
+  }
+}

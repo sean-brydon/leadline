@@ -1,0 +1,41 @@
+---
+import Engraving from "./Engraving.astro";
+
+// Every link marked data-pending needs its real address before the site
+// goes live: the docs, the changelog, the repository and the macOS download.
+---
+
+<div class="hero" id="top">
+  <Engraving />
+  <header>
+    <a class="mark" href="#top" aria-label="Leadline, home">
+      <svg width="18" height="22" viewBox="0 0 18 22" fill="none" aria-hidden="true"
+        ><path d="M9 1v11" stroke="currentColor" stroke-width="2" stroke-linecap="square" stroke-dasharray="2 3"></path><path
+          d="M5.5 13h7l2 8h-11z"
+          fill="currentColor"></path></svg
+      >
+      Leadline
+    </a>
+    <nav aria-label="Main">
+      <a href="#top" data-pending="docs">Docs</a>
+      <a class="roomy" href="#top" data-pending="changelog">Changelog</a>
+      <a href="#top" data-pending="repository">GitHub</a>
+    </nav>
+  </header>
+  <main class="copy">
+    <h1>Take a sounding of your code.</h1>
+    <p class="lede">
+      Leadline shows every database query, trace and log line from the apps running on your machine. Local first: nothing leaves
+      your computer.
+    </p>
+    <div class="actions">
+      <a class="btn primary" href="#top" data-pending="macos-download"
+        ><svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"
+          ><path d="M8 2.5V10.5M4.5 7 8 10.5 11.5 7M3 13.5H13"></path></svg
+        >Download for macOS</a
+      >
+      <a class="btn" href="#top" data-pending="docs">Read the docs</a>
+    </div>
+    <p class="note">Works with anything that speaks OpenTelemetry.</p>
+  </main>
+</div>

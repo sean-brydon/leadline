@@ -1,0 +1,17 @@
+/bin/
+/app/node_modules/
+/app/dist/
+/app/src-tauri/target/
+/app/src-tauri/gen/
+/app/src-tauri/binaries/
+.env*
+.DS_Store
+*.duckdb
+*.duckdb.wal
+/site/node_modules/
+/site/dist/
+/site/.astro/
+/dist/
+
+# Screen recordings of real use can show private data; they stay local.
+/recordings/

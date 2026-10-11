@@ -1,0 +1,5 @@
+# protobufjs (under the OTLP exporters) has a postinstall that only prints a
+# note about its command-line tool. Nothing here needs it to run, and saying
+# so keeps `pnpm install` from failing on an unapproved build script.
+allowBuilds:
+  protobufjs: false

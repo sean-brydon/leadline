@@ -1,0 +1,17 @@
+@import url("https://fonts.googleapis.com/css2?family=Geist:wght@400;500;600&family=Geist+Mono:wght@400;500&display=swap");
+*{box-sizing:border-box}
+body{margin:0;font-family:"Geist",system-ui,sans-serif;-webkit-font-smoothing:antialiased}
+.hero{position:relative;min-height:900px;overflow:hidden;display:flex;flex-direction:column}
+.art{position:absolute;inset:0;width:100%;height:100%;object-fit:cover;image-rendering:pixelated;pointer-events:none}
+nav{position:relative;display:flex;align-items:center;gap:28px;padding:28px 56px;font-size:14px}
+nav .mark{display:flex;align-items:center;gap:10px;font-weight:600;font-size:16px;letter-spacing:-0.01em;margin-right:auto;color:inherit;text-decoration:none}
+nav a{color:inherit;text-decoration:none;opacity:.72}nav a:hover{opacity:1}
+nav .mark{opacity:1}
+h1{margin:0;font-weight:500;letter-spacing:-0.035em;line-height:1.02;text-wrap:balance}
+.lede{margin:0;font-size:19px;line-height:1.5;text-wrap:pretty}
+.actions{display:flex;gap:12px;flex-wrap:wrap}
+.btn{display:inline-flex;align-items:center;gap:9px;height:46px;padding:0 20px;border-radius:9px;font-size:15px;font-weight:500;text-decoration:none;border:1px solid transparent}
+.btn svg{width:16px;height:16px}
+.note{margin:0;font-size:13.5px}
+.mono{font-family:"Geist Mono",ui-monospace,monospace}
+@media (max-width:720px){.hero{min-height:0}.art{position:relative;inset:auto;height:360px;flex:none}nav{order:-1;padding:18px 22px;gap:18px}.copy{margin:0!important;padding:28px 22px 56px!important}.lede{font-size:17px}.hide-s{display:none!important}}

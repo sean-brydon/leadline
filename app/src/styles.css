@@ -1,0 +1,263 @@
+@import "tailwindcss";
+@import "@fontsource-variable/inter";
+@import "@fontsource-variable/jetbrains-mono";
+@import "uplot/dist/uPlot.min.css";
+
+/* The interface is coss-ui: Base UI components kept in components/ui and
+   added with `pnpm dlx shadcn@latest add @coss/<name>` (components.json).
+   This file is their token layer: light, and dark when the system is, which
+   is what Tailwind's `dark:` means here. So there is no `.dark` class: if
+   `shadcn add` writes a `.dark` block or a `@custom-variant dark` into this
+   file, move its tokens into the dark block below and delete the variant. */
+
+@theme inline {
+  --font-heading: "Inter Variable", sans-serif;
+  --font-mono: "JetBrains Mono Variable", ui-monospace, monospace;
+  --font-sans: "Inter Variable", sans-serif;
+  /* An instrument, so one step denser than coss's own: its controls and
+     the page's text are 13px where they would be 14. */
+  --text-sm: 0.8125rem;
+  --text-sm--line-height: calc(1.25 / 0.8125);
+
+  --color-background: var(--background);
+  --color-foreground: var(--foreground);
+  --color-card: var(--card);
+  --color-card-foreground: var(--card-foreground);
+  --color-popover: var(--popover);
+  --color-popover-foreground: var(--popover-foreground);
+  --color-primary: var(--primary);
+  --color-primary-foreground: var(--primary-foreground);
+  --color-secondary: var(--secondary);
+  --color-secondary-foreground: var(--secondary-foreground);
+  /* coss calls these two --muted and --accent. Here those names belong to
+     the charts (below), so the tints are --ui-muted and --ui-accent. Only
+     the variables are renamed: the classes are coss's, bg-muted and
+     bg-accent. */
+  --color-muted: var(--ui-muted);
+  --color-muted-foreground: var(--muted-foreground);
+  --color-accent: var(--ui-accent);
+  --color-accent-foreground: var(--accent-foreground);
+  --color-border: var(--border);
+  --color-input: var(--input);
+  --color-ring: var(--ring);
+  --color-destructive: var(--destructive);
+  --color-destructive-foreground: var(--destructive-foreground);
+  --color-info: var(--info);
+  --color-info-foreground: var(--info-foreground);
+  --color-success: var(--success);
+  --color-success-foreground: var(--success-foreground);
+  --color-warning: var(--warning);
+  --color-warning-foreground: var(--warning-foreground);
+  --radius-sm: calc(var(--radius) * 0.6);
+  --radius-md: calc(var(--radius) * 0.8);
+  --radius-lg: var(--radius);
+  --radius-xl: calc(var(--radius) * 1.4);
+  --radius-2xl: calc(var(--radius) * 1.8);
+  --radius-3xl: calc(var(--radius) * 2.2);
+  --radius-4xl: calc(var(--radius) * 2.6);
+
+  /* The charts' inks as classes, for a mark drawn in the page that has to
+     match one drawn on a canvas: a meter beside a chart, a legend's swatch,
+     a status dot. `brand` is the charts' --accent, Leadline's teal. */
+  --color-brand: var(--accent);
+  --color-blue: var(--blue);
+  --color-violet: var(--violet);
+  --color-ok: var(--ok);
+  --color-warn: var(--warn);
+  --color-err: var(--err);
+  /* The charts' own legends (components/Heatmap.tsx) write --fg and --muted
+     as text-fg and text-muted. text-muted is the text colour only: bg-muted
+     is coss's tint, above. */
+  --color-fg: var(--fg);
+  --text-color-muted: var(--muted);
+}
+
+/* The charts draw on canvas and read these as six-digit hex on purpose:
+   they add their own alpha by appending two more digits (components/
+   Chart.tsx, chartkit.ts). So no oklch, no color-mix and no alpha here.
+   --fg, --muted and --line are the interface's foreground, muted foreground
+   and border as flat hex, for a chart's labels, axes and grid; change them
+   with the tokens they copy. The rest are the inks data is drawn in. */
+:root {
+  --fg: #262626;
+  --muted: #686868;
+  --line: #ebebeb;
+  --accent: #0d9488;
+  --blue: #2563eb;
+  --violet: #7c3aed;
+  --ok: #16a34a;
+  --warn: #b45309;
+  --err: #dc2626;
+  /* Lines of a chart split by something that isn't good or bad (a service,
+     a database): told apart by hue alone, so they are picked to stay apart
+     for colour-blind eyes too, and none is a status colour. Used in order. */
+  --series-1: #2563eb;
+  --series-2: #d9632a;
+  --series-3: #0d9488;
+  --series-4: #7c3aed;
+  --series-5: #db2777;
+}
+
+@media (prefers-color-scheme: dark) {
+  :root {
+    --fg: #f5f5f5;
+    --muted: #818181;
+    --line: #292929;
+    --accent: #2dd4bf;
+    --blue: #60a5fa;
+    --violet: #a78bfa;
+    --ok: #4ade80;
+    --warn: #fbbf24;
+    --err: #f87171;
+    --series-1: #4f93f0;
+    --series-2: #d9692f;
+    --series-3: #1fa893;
+    --series-4: #8f7cec;
+    --series-5: #d9578c;
+  }
+}
+
+/* coss-ui's tokens, its neutral theme. The status colours are the charts'
+   inks, so a red number and the red bar beside it are one red. */
+:root {
+  color-scheme: light dark;
+  --radius: 0.625rem;
+  --background: var(--color-white);
+  --foreground: var(--color-neutral-800);
+  --card: var(--color-white);
+  --card-foreground: var(--color-neutral-800);
+  --popover: var(--color-white);
+  --popover-foreground: var(--color-neutral-800);
+  --primary: var(--color-neutral-800);
+  --primary-foreground: var(--color-neutral-50);
+  --secondary: --alpha(var(--color-black) / 4%);
+  --secondary-foreground: var(--color-neutral-800);
+  --ui-muted: --alpha(var(--color-black) / 4%);
+  --muted-foreground: color-mix(in srgb, var(--color-neutral-500) 90%, var(--color-black));
+  --ui-accent: --alpha(var(--color-black) / 4%);
+  --accent-foreground: var(--color-neutral-800);
+  --border: --alpha(var(--color-black) / 8%);
+  --input: --alpha(var(--color-black) / 10%);
+  --ring: var(--color-neutral-400);
+  --destructive: var(--err);
+  --destructive-foreground: var(--err);
+  --info: var(--blue);
+  --info-foreground: var(--blue);
+  --success: var(--ok);
+  --success-foreground: var(--ok);
+  --warning: var(--warn);
+  --warning-foreground: var(--warn);
+}
+
+@media (prefers-color-scheme: dark) {
+  :root {
+    --background: color-mix(in srgb, var(--color-neutral-950) 95%, var(--color-white));
+    --foreground: var(--color-neutral-100);
+    --card: color-mix(in srgb, var(--background) 98%, var(--color-white));
+    --card-foreground: var(--color-neutral-100);
+    --popover: color-mix(in srgb, var(--background) 98%, var(--color-white));
+    --popover-foreground: var(--color-neutral-100);
+    --primary: var(--color-neutral-100);
+    --primary-foreground: var(--color-neutral-800);
+    --secondary: --alpha(var(--color-white) / 4%);
+    --secondary-foreground: var(--color-neutral-100);
+    --ui-muted: --alpha(var(--color-white) / 4%);
+    --muted-foreground: color-mix(in srgb, var(--color-neutral-500) 90%, var(--color-white));
+    --ui-accent: --alpha(var(--color-white) / 4%);
+    --accent-foreground: var(--color-neutral-100);
+    --border: --alpha(var(--color-white) / 6%);
+    --input: --alpha(var(--color-white) / 8%);
+    --ring: var(--color-neutral-500);
+  }
+}
+
+@layer base {
+  /* The browser's own focus outline, where a control draws no ring of its
+     own, is the ring colour. */
+  * {
+    @apply border-border outline-ring;
+    scrollbar-width: thin;
+    scrollbar-color: color-mix(in srgb, var(--foreground) 16%, transparent) transparent;
+  }
+  html,
+  body,
+  #root {
+    height: 100%;
+  }
+  html,
+  body {
+    overscroll-behavior: none;
+  }
+  html {
+    @apply font-sans antialiased;
+  }
+  body {
+    @apply bg-background text-sm text-foreground select-none;
+  }
+  code,
+  kbd,
+  samp,
+  pre {
+    font-family: var(--font-mono);
+  }
+  /* JetBrains Mono's ligatures draw "!=" and "//" as one glyph, which is
+     not what a query or a URL says, so mono text never uses them. */
+  .font-mono,
+  code,
+  kbd,
+  samp,
+  pre {
+    font-variant-ligatures: none;
+    font-feature-settings: "calt" 0;
+  }
+  input,
+  textarea {
+    @apply select-text;
+  }
+}
+
+/* Data is for copying; chrome is not. */
+.selectable {
+  user-select: text;
+}
+
+/* uPlot's legend, as one quiet line under the chart. */
+.u-legend {
+  font-family: var(--font-sans);
+  font-size: 11px;
+  color: var(--muted);
+  text-align: left;
+  padding-left: 4px;
+}
+.u-legend .u-marker {
+  width: 8px;
+  height: 8px;
+  border-radius: 2px;
+}
+.u-legend .u-value {
+  font-variant-numeric: tabular-nums;
+  color: var(--fg);
+}
+
+/* The cursor: one hovered moment, marked on every time chart at once. */
+.uplot .u-cursor-x,
+.uplot .u-cursor-y {
+  border-color: var(--muted);
+  opacity: 0.75;
+}
+
+/* Reduce motion (System Settings → Accessibility → Display): animations
+   and transitions finish at once, so a spinner holds still and the tab
+   underline doesn't slide. */
+@media (prefers-reduced-motion: reduce) {
+  *,
+  ::before,
+  ::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    animation-delay: 0ms !important;
+    transition-duration: 0.01ms !important;
+    transition-delay: 0ms !important;
+    scroll-behavior: auto !important;
+  }
+}

@@ -1,0 +1,118 @@
+name: release
+
+# Pushing a version tag (v0.2.0) builds leadline and leadlined for Linux and
+# macOS, both architectures of each, and attaches the tarballs, their
+# checksums and the installer to a GitHub release of that tag. AGENTS.md has
+# the steps that lead up to the tag.
+#
+# Run by hand from the Actions tab it builds and tries everything and keeps
+# the files as the run's artifacts, without releasing anything: a rehearsal.
+on:
+  push:
+    tags: ["v[0-9]+.[0-9]+.[0-9]+*"]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+# One release of a tag at a time, and never cut short halfway.
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  # The Linux programs, each on a runner of its own architecture: they are
+  # built inside a container of AlmaLinux 8 (scripts/build-linux.sh), which
+  # only runs at full speed on the processor it is for.
+  linux:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - arch: amd64
+            runner: ubuntu-24.04
+          - arch: arm64
+            runner: ubuntu-24.04-arm
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+      - name: The tag is the VERSION file's
+        if: startsWith(github.ref, 'refs/tags/')
+        run: |
+          if [ "$GITHUB_REF_NAME" != "v$(cat VERSION)" ]; then
+            echo "::error::the tag is $GITHUB_REF_NAME but VERSION says $(cat VERSION): bump VERSION, commit, and tag that commit"
+            exit 1
+          fi
+      - run: scripts/release.sh linux_${{ matrix.arch }}
+      # What a person does with it: the installer, from the tarball, as an
+      # ordinary user; then the daemon, asked what it holds. Without the
+      # service (a runner is not a login), which the installer's --no-service
+      # is for.
+      - name: Install it and ask the daemon
+        run: |
+          sh scripts/install.sh --from "dist/leadline_$(cat VERSION)_linux_${{ matrix.arch }}.tar.gz" --no-service
+          ~/.local/bin/leadlined -addr 127.0.0.1:4320 -otlp off -data "$RUNNER_TEMP/leadline" &
+          daemon=$!
+          for _ in $(seq 20); do
+            ~/.local/bin/leadline version -daemon && break
+            sleep 1
+          done
+          test "$(~/.local/bin/leadline version -daemon)" = "$(cat VERSION)"
+          ~/.local/bin/leadline demo -traces 50
+          curl -fsS http://127.0.0.1:4320/api/summary
+          kill "$daemon"
+          wait "$daemon"
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: linux_${{ matrix.arch }}
+          path: dist/leadline_*.tar.gz
+          if-no-files-found: error
+
+  # The macOS programs, with the Mac's own clang; the Intel ones are built
+  # on the same Apple-silicon runner, which clang can do.
+  macos:
+    runs-on: macos-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+      - uses: actions/setup-go@d35c59abb061a4a6fb18e82ac0862c26744d6ab5 # v5.5.0
+        with:
+          go-version-file: go.mod
+      - run: scripts/release.sh darwin_arm64 darwin_amd64
+      - name: They start
+        run: |
+          test "$(dist/darwin_arm64/leadlined --version | cut -d' ' -f2)" = "$(cat VERSION)"
+          dist/darwin_arm64/leadline version | head -1
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: darwin
+          path: dist/leadline_*.tar.gz
+          if-no-files-found: error
+
+  # Only for a tag: one list of checksums over all four tarballs, and the
+  # release. The installer is attached too, so that
+  # .../releases/latest/download/install.sh is always the one that goes with
+  # the newest release.
+  publish:
+    if: startsWith(github.ref, 'refs/tags/')
+    needs: [linux, macos]
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        with:
+          path: dist
+          merge-multiple: true
+      - run: scripts/release.sh checksums
+      - name: All four are there
+        run: test "$(wc -l < dist/checksums.txt)" -eq 4
+      - name: Release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release create "$GITHUB_REF_NAME" --verify-tag --title "$GITHUB_REF_NAME" --generate-notes \
+            dist/leadline_*.tar.gz dist/checksums.txt scripts/install.sh
