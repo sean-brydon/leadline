@@ -347,11 +347,14 @@ func (s *Server) events(w http.ResponseWriter, r *http.Request) {
 	}
 	w.Header().Set("Content-Type", "text/event-stream")
 	w.Header().Set("Cache-Control", "no-cache")
+	// Listen before greeting: "hello" tells the app it may fetch, and data
+	// that arrives between the greeting and the subscription would wake
+	// nobody.
+	ch := s.hub.subscribe()
+	defer s.hub.unsubscribe(ch)
 	fmt.Fprint(w, "event: hello\ndata: {}\n\n")
 	flusher.Flush()
 
-	ch := s.hub.subscribe()
-	defer s.hub.unsubscribe(ch)
 	keepalive := time.NewTicker(20 * time.Second)
 	defer keepalive.Stop()
 	for {
