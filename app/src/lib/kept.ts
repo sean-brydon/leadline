@@ -26,26 +26,32 @@ export type Kept = {
 };
 
 /**
- * kept says what is held and for how long. `here` is the machine, as in
- * "this Mac". `storage` is null from a daemon too old to report it, and
- * then the lines count what is held and promise no more.
+ * kept says what is held and for how long. `here` is the machine whose
+ * daemon holds it, as in "this Mac" or "hetzner-1". `away` says that
+ * machine is another one, looked at from this computer: the data is kept
+ * there, and what this window shows of it does travel here, so the lines
+ * say that and don't claim nothing leaves. `storage` is null from a daemon
+ * too old to report it, and then the lines count what is held and promise
+ * no more.
  */
-export function kept(here: string, summary: Summary | undefined, storage: Storage | null | undefined, nowMs: number): Kept {
+export function kept(here: string, summary: Summary | undefined, storage: Storage | null | undefined, nowMs: number, away = false): Kept {
   const none: Pick<Kept, "full" | "fullText"> = { full: null, fullText: "" };
   const n = (count: number, one: string) => `${fmtCount(count)} ${count === 1 ? one : `${one}s`}`;
   const counts = summary ? `${n(summary.spans, "span")}, ${n(summary.logs, "log")} and ${n(summary.traces, "trace")}` : "";
+  const stays = away ? `Everything is kept on ${here}; this window only reads it.` : `Everything stays on ${here}.`;
+  const leaves = away ? `It is all kept on ${here}, and leaves only for this window, through the port forwarded to this Mac.` : `Nothing leaves ${here}.`;
   if (!storage) {
-    if (!summary) return { short: `Everything stays on ${here}.`, long: `Nothing leaves ${here}.`, ...none };
+    if (!summary) return { short: stays, long: leaves, ...none };
     return {
-      short: `Everything stays on ${here}. Holding ${n(summary.spans, "span")} and ${n(summary.logs, "log")}.`,
-      long: `Nothing leaves ${here}. Leadline holds ${counts} now, and drops the oldest by itself.`,
+      short: `${stays} Holding ${n(summary.spans, "span")} and ${n(summary.logs, "log")}.`,
+      long: `${leaves} Leadline holds ${counts} now, and drops the oldest by itself.`,
       ...none,
     };
   }
   const onDisk = storage.size_bytes > 0;
   const size = fmtBytes(storage.size_bytes);
   const until = storage.retain_ms > 0 ? `for up to ${fmtKeep(storage.retain_ms)}` : "until you remove it";
-  const short = `Everything stays on ${here}. ${onDisk ? `${size} kept` : "Kept in memory"}, ${until}.`;
+  const short = `${stays} ${onDisk ? `${size} kept` : "Kept in memory"}, ${until}.`;
 
   const holds = onDisk ? `Leadline holds ${size} on disk${counts ? `: ${counts}` : ""}` : `Leadline holds ${counts || "its data"} in memory, and writes none of it to disk`;
   const oldest = storage.oldest_ms > 0 ? ` The oldest is from ${fmtAgo(nowMs - storage.oldest_ms)}.` : "";
@@ -58,7 +64,7 @@ export function kept(here: string, summary: Summary | undefined, storage: Storag
         : "Nothing is dropped by itself.";
   return {
     short,
-    long: `Nothing leaves ${here}. ${holds}.${oldest} ${rule}`,
+    long: `${leaves} ${holds}.${oldest} ${rule}`,
     full: onDisk && storage.max_bytes > 0 ? Math.min(1, storage.size_bytes / storage.max_bytes) : null,
     fullText: onDisk && cap ? `${size} of ${cap}` : "",
   };

@@ -1,0 +1,54 @@
+#!/bin/sh
+# A stand-in for xcrun, for scripts/release-test: it answers for Apple's
+# notary service and for the stapler, so a rehearsal sends nothing to Apple.
+# Everything else goes to the real xcrun.
+#
+#   STANDIN_NOTARY   "reject" makes every submission come back Invalid, as
+#                    Apple's does for a program it won't notarize.
+#   STANDIN_LOG      every notarytool and stapler call is added to this file.
+#
+# `stapler staple` says it worked and staples nothing: there is no ticket.
+# The release scripts skip the checks that need a real one in a rehearsal.
+set -eu
+
+log() { [ -z "${STANDIN_LOG:-}" ] || echo "xcrun $*" >>"$STANDIN_LOG"; }
+
+case "${1:-} ${2:-}" in
+  "notarytool submit")
+    log "$@"
+    for a; do [ ! -f "$a" ] || case $a in *.zip | *.dmg | *.pkg) file=$a ;; esac; done
+    [ -n "${file:-}" ] || { echo "Error: no file to submit" >&2; exit 1; }
+    if [ "${STANDIN_NOTARY:-}" = reject ]; then
+      echo '{"id": "00000000-acme-0000-0000-00000000dead", "status": "Invalid", "message": "Processing complete"}'
+    else
+      echo '{"id": "00000000-acme-0000-0000-000000000001", "status": "Accepted", "message": "Processing complete"}'
+    fi
+    ;;
+  "notarytool log")
+    log "$@"
+    cat <<'JSON'
+{
+  "status": "Invalid",
+  "statusSummary": "Archive contains critical validation errors",
+  "issues": [
+    {
+      "severity": "error",
+      "path": "acme.zip/leadlined",
+      "message": "The binary is not signed with a valid Developer ID certificate.",
+      "architecture": "arm64"
+    }
+  ]
+}
+JSON
+    ;;
+  "stapler staple")
+    log "$@"
+    echo "The staple and validate action worked! (stand-in: nothing was stapled)"
+    ;;
+  "stapler validate")
+    log "$@"
+    echo "stand-in xcrun: there is no ticket to validate in a rehearsal" >&2
+    exit 65
+    ;;
+  *) exec /usr/bin/xcrun "$@" ;;
+esac

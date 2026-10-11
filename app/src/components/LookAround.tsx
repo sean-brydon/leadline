@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useId, useMemo, useRef, useState, type FormEvent, type ReactNode, type Ref } from "react";
 import { BoxIcon, CheckIcon, CircleAlertIcon, DatabaseIcon, FolderIcon, RefreshCwIcon, ScanSearchIcon, XIcon, ZapIcon } from "lucide-react";
-import { api, ApiError, base, type Box, type Connection, type Fault, type FoundConnection, type FoundProject, type Scan, type TestResult } from "@/lib/api";
+import { api, ApiError, base, ownBase, showingLocal, type Box, type Connection, type Fault, type FoundConnection, type FoundProject, type Scan, type TestResult } from "@/lib/api";
 import {
   adviceCommand,
   adviceTitle,
@@ -41,6 +41,7 @@ import {
   type Picks,
 } from "@/lib/discover";
 import { fmtMs } from "@/lib/format";
+import { LOCAL_ID } from "@/lib/machines";
 import { kindVersion, versionOf } from "@/lib/sources";
 import { cn } from "@/lib/utils";
 import { AgentPrompt, usePolled } from "@/components/AddSource";
@@ -56,22 +57,24 @@ const faultOf = (e: unknown): Fault => (e instanceof ApiError ? { code: e.code, 
 
 // The folders a person has pointed the scan at are kept between visits, so
 // "Look for more" looks where they looked before. They are paths, typed by
-// the person; nothing found in them is kept here.
+// the person; nothing found in them is kept here. Each machine has its own:
+// a folder on this Mac is not one on another machine.
 const FOLDERS_KEY = "leadline.look.folders";
 const MAX_FOLDERS = 8;
+const foldersKey = (machine: string) => (machine === LOCAL_ID ? FOLDERS_KEY : `${FOLDERS_KEY}:${machine}`);
 
-function loadFolders(): string[] {
+function loadFolders(machine: string): string[] {
   try {
-    const raw = JSON.parse(localStorage.getItem(FOLDERS_KEY) ?? "[]") as unknown;
+    const raw = JSON.parse(localStorage.getItem(foldersKey(machine)) ?? "[]") as unknown;
     return Array.isArray(raw) ? raw.filter((f): f is string => typeof f === "string" && f.trim() !== "").slice(0, MAX_FOLDERS) : [];
   } catch {
     return [];
   }
 }
 
-function saveFolders(folders: string[]) {
+function saveFolders(machine: string, folders: string[]) {
   try {
-    localStorage.setItem(FOLDERS_KEY, JSON.stringify(folders));
+    localStorage.setItem(foldersKey(machine), JSON.stringify(folders));
   } catch {
     // A full or forbidden store forgets the folders at the next launch, no more.
   }
@@ -85,8 +88,10 @@ const REPLACED: Fault = { code: "cancelled", message: "Another scan replaced thi
 type Reading = { ids: string[]; at: number };
 
 /**
- * Look is looking around this machine, as the window holds it: the scan,
- * the reading of env files, and the only ways either starts.
+ * Look is looking around the machine whose daemon the window shows, as the
+ * window holds it: the scan, the reading of env files, and the only ways
+ * either starts. The daemon looks around its own machine, so turned to
+ * another machine it is that one that is scanned.
  */
 export type Look = {
   /** The folders a person has named to look in as well. */
@@ -122,12 +127,13 @@ export type Look = {
  * itself: not when it mounts, not on a timer. `start` and `read` are the
  * only things that do, and they run when a person presses a button.
  *
- * `on` is whether this window may look at all (this Mac's daemon, and
- * connected); a daemon that comes back may be a newer one, so what was
- * known of an old one is dropped.
+ * `on` is whether this window may look at all (its daemon is connected);
+ * a daemon that comes back may be a newer one, so what was known of an old
+ * one is dropped. `machine` is the id of the machine being shown, whose
+ * folders these are.
  */
-export function useLook(on: boolean): Look {
-  const [folders, setFolders] = useState(loadFolders);
+export function useLook(on: boolean, machine: string = LOCAL_ID): Look {
+  const [folders, setFolders] = useState(() => loadFolders(machine));
   const [got, setGot] = useState<{ scan?: Scan; fault?: Fault; busy: boolean; started: boolean }>({ busy: false, started: false });
   const [old, setOld] = useState(false);
   const [reading, setReading] = useState<Reading | null>(null);
@@ -180,7 +186,7 @@ export function useLook(on: boolean): Look {
       const look = next ?? where.current;
       if (next) {
         setFolders(next);
-        saveFolders(next);
+        saveFolders(machine, next);
       }
       const mine = ++turn.current;
       setReading(null);
@@ -214,7 +220,7 @@ export function useLook(on: boolean): Look {
         }
       })();
     },
-    [read],
+    [read, machine],
   );
 
   const refresh = useCallback(() => {
@@ -258,10 +264,12 @@ type Props = {
   look: Look;
   /** Nothing has ever reached this daemon: this is the window's first screen. */
   first: boolean;
-  /** The machine in a sentence: "this Mac". */
+  /** The machine being looked around, in a sentence: "this Mac", or the name of another. */
   here: string;
-  /** The owner's Shipyard boxes, once they have been asked for and there are some. */
+  /** The owner's Shipyard boxes, once they have been asked for and there are some. Only ever asked for when this Mac is the one looked around. */
   boxes: Box[];
+  /** Go to the Machines view, where a box is added. */
+  onMachines?: () => void;
   /** The foot of a finished scan has come into view: where the Shipyard boxes are said, so the moment to ask for them. */
   onFoot: () => void;
   /** Leave for the by-hand dialog, at a kind of source when one is asked for. */
@@ -280,14 +288,14 @@ const NOT_HELD: Held = { state: "none", line: "" };
 /**
  * LookAround is the onboarding that looks before it asks, and asks before
  * it reads. It opens on what looking does and waits for a press. A scan
- * then lists the projects running on this machine with their env files by
+ * then lists the projects running on the machine with their env files by
  * name; the person ticks the projects whose env files Leadline may read
  * and presses the button that says so; the databases found there appear
  * with ticks of their own. Connect saves the ticked connections through
  * the daemon (this page never sees a password) and then waits, line by
  * line, until the daemon has really heard from each.
  */
-export function LookAround({ look, first, here, boxes, onFoot, onByHand, onDone, onChanged }: Props) {
+export function LookAround({ look, first, here, boxes, onMachines, onFoot, onByHand, onDone, onChanged }: Props) {
   const { scan, fault, busy, folders, reading } = look;
   const [picks, setPicks] = useState<Picks>(NO_PICKS);
   const [tested, setTested] = useState<Tested>({});
@@ -440,6 +448,7 @@ export function LookAround({ look, first, here, boxes, onFoot, onByHand, onDone,
                       picks={picks}
                       reading={reading}
                       faults={look.envFaults}
+                      mac={done.machine?.os === "darwin"}
                       onPick={(ids, on) => setPicks((p) => ({ ...p, env: { ...p.env, ...Object.fromEntries(ids.map((id) => [id, on])) } }))}
                       onRead={() => void look.read(toRead(done, picks).map((p) => p.id))}
                       onRetry={(id) => void look.read([id])}
@@ -473,7 +482,15 @@ export function LookAround({ look, first, here, boxes, onFoot, onByHand, onDone,
 
           {done && boxes.length > 0 && (
             <p className="px-1 text-[11.5px] leading-snug text-pretty text-muted-foreground">
-              Your Shipyard boxes: {sentence(boxes.map((b) => `${b.name} (${boxState(b, Date.now())})`))}. Leadline can't run on a box yet, so this looked at {here} only.
+              Your Shipyard boxes: {sentence(boxes.map((b) => `${b.name} (${boxState(b, Date.now())})`))}. This looked at {here} only. To look around a box, add it under{" "}
+              {onMachines ? (
+                <Inline onClick={onMachines} className="text-[11.5px] sm:text-[11.5px]">
+                  Machines
+                </Inline>
+              ) : (
+                "Machines"
+              )}{" "}
+              and turn the window to it.
             </p>
           )}
         </div>
@@ -518,10 +535,10 @@ const LOOKS_AT = [
   "The project folder of each dev server that is running: found by walking up from where it runs, and never as far as your home folder.",
   "The project files there: package.json, go.mod, pyproject.toml, Gemfile or Cargo.toml, next.config, and the git branch.",
 ];
-const DOES_NOT = [
+const doesNot = (here: string) => [
   "Open an env file. Each project's env files are listed by name, and Leadline reads them only for a project you tick.",
   "Look through your home folder, or read any program's environment.",
-  "Connect to anything, change a file, or send anything off this machine.",
+  `Connect to anything, change a file, or send anything off ${here}.`,
 ];
 
 /**
@@ -531,13 +548,17 @@ const DOES_NOT = [
  * by hand and handing the job to a coding agent.
  */
 function Intro({ first, here, onLook, onByHand }: { first: boolean; here: string; onLook: () => void; onByHand: () => void }) {
+  // Another machine is being looked at: what is run, is run there.
+  const away = !showingLocal();
   return (
     <div className="@container h-full overflow-y-auto">
       <div className="mx-auto flex min-h-full w-full max-w-[820px] flex-col justify-center gap-3 p-4">
         <div className="px-1">
           <h2 className="text-[15px] font-medium">{first ? "Connect your first source" : "Look for more to connect"}</h2>
           <p className="mt-0.5 text-pretty text-muted-foreground">
-            {first ? "Leadline is running, and nothing has reached it yet. It can look for what you have, you can add it yourself, or your coding agent can." : "Leadline can look for projects and databases that aren't connected yet."}
+            {first
+              ? `${away ? `Leadline is running on ${here}, and nothing has reached it there yet.` : "Leadline is running, and nothing has reached it yet."} It can look for what you have${away ? " there" : ""}, you can add it yourself, or your coding agent can.`
+              : `Leadline can look for projects and databases${away ? ` on ${here}` : ""} that aren't connected yet.`}
           </p>
         </div>
 
@@ -546,11 +567,11 @@ function Intro({ first, here, onLook, onByHand }: { first: boolean; here: string
             <h3 id="look-intro" className="font-medium">
               Look around {here}
             </h3>
-            <p className="mt-0.5 text-pretty text-muted-foreground">Nothing has been looked at yet. When you press the button, Leadline lists the projects running here, and you pick what to connect.</p>
+            <p className="mt-0.5 text-pretty text-muted-foreground">Nothing has been looked at yet. When you press the button, Leadline lists the projects running on {here}, and you pick what to connect.</p>
           </div>
           <div className="grid grid-cols-1 gap-x-6 gap-y-3.5 @xl:grid-cols-2">
             <Points title="It looks at" points={LOOKS_AT} mark={<CheckIcon aria-hidden className="size-3.5 text-success-foreground" />} />
-            <Points title="It does not" points={DOES_NOT} mark={<XIcon aria-hidden className="size-3.5 text-muted-foreground" />} />
+            <Points title="It does not" points={doesNot(here)} mark={<XIcon aria-hidden className="size-3.5 text-muted-foreground" />} />
           </div>
           <div className="flex flex-wrap items-center gap-2 pt-0.5">
             <Button onClick={onLook}>
@@ -567,7 +588,7 @@ function Intro({ first, here, onLook, onByHand }: { first: boolean; here: string
           {(line) => (
             <Surface render={<section aria-label="Have your coding agent do it" />} className="gap-1.5 px-4 py-3.5">
               <h3 className="font-medium">Or have your coding agent do it</h3>
-              <Small className="text-xs">Paste this into Claude Code, Codex or Cursor in your project. It wires the dev setup and checks that data arrives.</Small>
+              <Small className="text-xs">Paste this into Claude Code, Codex or Cursor in your project{away ? ` on ${here}` : ""}. It wires the dev setup and checks that data arrives.</Small>
               {line}
             </Surface>
           )}
@@ -575,7 +596,7 @@ function Intro({ first, here, onLook, onByHand }: { first: boolean; here: string
 
         {first && (
           <Small className="px-1 text-xs">
-            Or run <Code>leadline demo</Code> to see made-up data before any of your own.
+            Or run <Code>leadline demo</Code>{away ? ` on ${here}` : ""} to see made-up data before any of your own.
           </Small>
         )}
       </div>
@@ -703,6 +724,8 @@ type EnvFilesProps = {
   picks: Picks;
   reading: Reading | null;
   faults: Record<string, Fault>;
+  /** The machine looked around is a Mac, where the system can keep a folder from Leadline. */
+  mac: boolean;
   onPick: (ids: string[], on: boolean) => void;
   onRead: () => void;
   onRetry: (id: string) => void;
@@ -714,7 +737,7 @@ type EnvFilesProps = {
  * ticked to begin with; and the one button that reads says how many files
  * of how many projects a press will open.
  */
-function EnvFiles({ scan, picks, reading, faults, onPick, onRead, onRetry }: EnvFilesProps) {
+function EnvFiles({ scan, picks, reading, faults, mac, onPick, onRead, onRetry }: EnvFilesProps) {
   const id = useId();
   const { rows, without } = useMemo(() => envRows(scan), [scan]);
   const ask = rows.filter((r) => r.state === "ask");
@@ -772,6 +795,7 @@ function EnvFiles({ scan, picks, reading, faults, onPick, onRead, onRetry }: Env
             locked={!!reading}
             queued={queued(r.project.id)}
             fault={faults[r.project.id]}
+            mac={mac}
             onPick={(on) => onPick([r.project.id], on)}
             onRetry={() => onRetry(r.project.id)}
           />
@@ -782,9 +806,9 @@ function EnvFiles({ scan, picks, reading, faults, onPick, onRead, onRetry }: Env
   );
 }
 
-type EnvLineProps = { cid: string; row: EnvRow; ticked: boolean; now: boolean; locked: boolean; queued: boolean; fault?: Fault; onPick: (on: boolean) => void; onRetry: () => void };
+type EnvLineProps = { cid: string; row: EnvRow; ticked: boolean; now: boolean; locked: boolean; queued: boolean; fault?: Fault; mac: boolean; onPick: (on: boolean) => void; onRetry: () => void };
 
-function EnvLine({ cid, row, ticked, now, locked, queued, fault, onPick, onRetry }: EnvLineProps) {
+function EnvLine({ cid, row, ticked, now, locked, queued, fault, mac, onPick, onRetry }: EnvLineProps) {
   const p = row.project;
   const names = p.env_files.map((f) => f.file);
   return (
@@ -815,7 +839,7 @@ function EnvLine({ cid, row, ticked, now, locked, queued, fault, onPick, onRetry
         {row.line && <Small>{row.line}.</Small>}
         {row.unopened.length > 0 && (
           <Small className="text-warning-foreground">
-            {sentence(row.unopened)} could not be opened, so {row.unopened.length === 1 ? "it was" : "they were"} not read. <span className="text-muted-foreground">If macOS asked whether Leadline may reach this folder, it was told no.</span>
+            {sentence(row.unopened)} could not be opened, so {row.unopened.length === 1 ? "it was" : "they were"} not read.{mac && <span className="text-muted-foreground"> If macOS asked whether Leadline may reach this folder, it was told no.</span>}
           </Small>
         )}
         {fault && (
@@ -947,7 +971,7 @@ function Databases({ scan, reading, here, picks, tested, hold, headRef, onTest, 
                   </span>
                   <div className="min-w-0">
                     <label htmlFor={`${id}-${c.id}`}>{c.kind === "redis" ? "Capture every command" : "Capture every query"}</label>
-                    <Small>{pick?.capture ? (c.kind === "redis" ? "With MONITOR, which can slow a busy Redis." : "Through a port Leadline opens on this machine.") : "Off: only its statistics are read."}</Small>
+                    <Small>{pick?.capture ? (c.kind === "redis" ? "With MONITOR, which can slow a busy Redis." : `Through a port Leadline opens on ${here}.`) : "Off: only its statistics are read."}</Small>
                   </div>
                 </div>
               ) : (
@@ -1174,7 +1198,9 @@ function Line({ tone, icon, title, sub, hint, aside, children }: { tone: Heard["
  * source, which the page learns by asking it every second.
  */
 function Connecting({ state, first, here, onBack, onDone }: { state: SavedState; first: boolean; here: string; onBack: () => void; onDone: () => void }) {
-  const daemon = base();
+  // Where the daemon answers: on its own machine, and for another machine the port on this one it is read through.
+  const daemon = ownBase().replace("http://", "");
+  const answers = showingLocal() ? `Its daemon answers at ${daemon}. Nothing it holds leaves ${here}.` : `Its daemon answers at ${daemon} there, and this window reads it through port ${base().split(":").pop()} on this Mac. What it holds is kept on ${here}.`;
   const sources = usePolled(() => api.sources(), true);
   const runs = usePolled(() => api.runs(), state.projects.length > 0);
 
@@ -1204,7 +1230,7 @@ function Connecting({ state, first, here, onBack, onDone }: { state: SavedState;
 
           <Surface render={<section aria-label="What is connected" />} className="overflow-hidden">
             <ul>
-              <Line tone={sources ? "done" : "wait"} title={`Leadline is running on ${here}`} sub={sources ? `Its daemon answers at ${daemon.replace("http://", "")}. Nothing it holds leaves ${here}.` : "Asking its daemon…"} />
+              <Line tone={sources ? "done" : "wait"} title={`Leadline is running on ${here}`} sub={sources ? answers : "Asking its daemon…"} />
               {heardConns.map(({ c, heard }) => (
                 <Line
                   key={c.id}
@@ -1288,7 +1314,7 @@ function Connecting({ state, first, here, onBack, onDone }: { state: SavedState;
               {(line) => (
                 <Surface render={<section aria-label="Have your coding agent do it" />} className="gap-1.5 px-3.5 py-3">
                   <h3 className="text-xs font-medium">Or have your coding agent do it</h3>
-                  <Small>Paste this into Claude Code, Codex or Cursor in the project. It takes the steps above and checks that data arrives.</Small>
+                  <Small>Paste this into Claude Code, Codex or Cursor in the project{showingLocal() ? "" : ` on ${here}`}. It takes the steps above and checks that data arrives.</Small>
                   {line}
                 </Surface>
               )}

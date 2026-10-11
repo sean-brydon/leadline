@@ -1,16 +1,43 @@
 name: release
 
-# Pushing a version tag (v0.2.0) builds leadline and leadlined for Linux and
-# macOS, both architectures of each, and attaches the tarballs, their
-# checksums and the installer to a GitHub release of that tag. AGENTS.md has
-# the steps that lead up to the tag.
+# Pushing a version tag (v0.2.0) builds a whole release and publishes it:
 #
-# Run by hand from the Actions tab it builds and tries everything and keeps
-# the files as the run's artifacts, without releasing anything: a rehearsal.
+#   leadline_<version>_linux_<arch>.tar.gz    the two programs, for a server
+#   leadline_<version>_darwin_<arch>.tar.gz   the same for a Mac, signed with
+#                                             the Developer ID and notarized
+#   Leadline-macos-universal.dmg              the desktop app, signed,
+#                                             notarized and stapled
+#   Leadline-macos-universal.app.tar.gz, .sig the app's updater's archive and
+#                                             its signature
+#   latest.json                               the feed installed apps update from
+#   checksums.txt, install.sh                 for the installer
+#
+# AGENTS.md has the steps that lead up to the tag, and the release skill
+# (.claude/skills/release) what to look at afterwards.
+#
+# The release is a draft until the last step: GitHub's "latest" skips
+# drafts, so installed apps and install.sh keep finding the last whole
+# release while this one is put together, and a run that fails leaves
+# nothing public.
+#
+# scripts/publish.sh can publish the macOS half from a Mac instead, before
+# it pushes the tag. This then finds the draft's latest.json announcing the
+# version, builds nothing for macOS and needs no signing secret; it adds the
+# Linux half and publishes.
+#
+# Run by hand from the Actions tab it is a rehearsal: it builds, signs,
+# notarizes and checks everything, keeps the files as the run's artifacts,
+# and releases nothing. Untick "sign" to rehearse before the signing secrets
+# are set: the macOS programs are then built unsigned and the app not at all.
 on:
   push:
     tags: ["v[0-9]+.[0-9]+.[0-9]+*"]
   workflow_dispatch:
+    inputs:
+      sign:
+        description: "Sign and notarize the macOS builds (needs the signing secrets)"
+        type: boolean
+        default: true
 
 permissions:
   contents: read
@@ -21,10 +48,79 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
+  # What can be known in a minute, before an hour of building: the tag is
+  # the version, the four places the version is written agree, and the
+  # secrets the macOS job signs with are there.
+  preflight:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    permissions:
+      # Only to see a draft release: a draft is invisible to a token that
+      # can only read.
+      contents: write
+    outputs:
+      mac: ${{ steps.mac.outputs.mac }}
+      sign: ${{ steps.mac.outputs.sign }}
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          persist-credentials: false
+      - name: The tag is the VERSION file's, and the app's
+        run: |
+          version=$(scripts/version.sh)
+          if [ "$GITHUB_REF_TYPE" = tag ] && [ "$GITHUB_REF_NAME" != "v$version" ]; then
+            echo "::error::the tag is $GITHUB_REF_NAME but VERSION says $version: set the version (scripts/version.sh), commit, and tag that commit"
+            exit 1
+          fi
+      - name: Is the macOS half already published from a Mac?
+        id: mac
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          SIGN: ${{ github.event_name == 'push' || inputs.sign }}
+        run: |
+          mac=build
+          # Published means the release's latest.json announces this version
+          # (scripts/publish.sh uploads it last, and tags after that). A
+          # rehearsal builds everything regardless.
+          if [ "$GITHUB_EVENT_NAME" = push ] && gh release download "$GITHUB_REF_NAME" --pattern latest.json --output - 2>/dev/null |
+            python3 -c 'import json, os, sys; sys.exit(json.load(sys.stdin).get("version") != os.environ["GITHUB_REF_NAME"][1:])' 2>/dev/null; then
+            echo "::notice::$GITHUB_REF_NAME's latest.json already announces this version: the macOS half was published from a Mac, and is not built again"
+            mac=published
+          fi
+          echo "mac=$mac" >>"$GITHUB_OUTPUT"
+          echo "sign=$SIGN" >>"$GITHUB_OUTPUT"
+      - name: The signing secrets are set
+        if: steps.mac.outputs.mac == 'build' && steps.mac.outputs.sign == 'true'
+        env:
+          # Whether each is set, never what it is.
+          APPLE_CERTIFICATE: ${{ secrets.APPLE_CERTIFICATE != '' }}
+          APPLE_CERTIFICATE_PASSWORD: ${{ secrets.APPLE_CERTIFICATE_PASSWORD != '' }}
+          APPLE_API_ISSUER: ${{ secrets.APPLE_API_ISSUER != '' }}
+          APPLE_API_KEY: ${{ secrets.APPLE_API_KEY != '' }}
+          APPLE_API_KEY_P8: ${{ secrets.APPLE_API_KEY_P8 != '' }}
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY != '' }}
+        run: |
+          missing=""
+          for name in APPLE_CERTIFICATE APPLE_CERTIFICATE_PASSWORD APPLE_API_ISSUER APPLE_API_KEY APPLE_API_KEY_P8 TAURI_SIGNING_PRIVATE_KEY; do
+            [ "${!name}" = true ] || missing="$missing $name"
+          done
+          if [ -n "$missing" ]; then
+            echo "::error::a signed release needs repository secrets that are not set:$missing. scripts/ci-secrets.sh sets them from 1Password (AGENTS.md, Versions and releases)."
+            exit 1
+          fi
+
+  # All of CI on the commit being released. Nothing is published unless it
+  # passes, so a release needs no test run on a laptop.
+  checks:
+    needs: preflight
+    uses: ./.github/workflows/ci.yml
+
   # The Linux programs, each on a runner of its own architecture: they are
   # built inside a container of AlmaLinux 8 (scripts/build-linux.sh), which
   # only runs at full speed on the processor it is for.
   linux:
+    needs: preflight
     strategy:
       fail-fast: false
       matrix:
@@ -37,13 +133,8 @@ jobs:
     timeout-minutes: 30
     steps:
       - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
-      - name: The tag is the VERSION file's
-        if: startsWith(github.ref, 'refs/tags/')
-        run: |
-          if [ "$GITHUB_REF_NAME" != "v$(cat VERSION)" ]; then
-            echo "::error::the tag is $GITHUB_REF_NAME but VERSION says $(cat VERSION): bump VERSION, commit, and tag that commit"
-            exit 1
-          fi
+        with:
+          persist-credentials: false
       - run: scripts/release.sh linux_${{ matrix.arch }}
       # What a person does with it: the installer, from the tarball, as an
       # ordinary user; then the daemon, asked what it holds. Without the
@@ -69,50 +160,182 @@ jobs:
           path: dist/leadline_*.tar.gz
           if-no-files-found: error
 
-  # The macOS programs, with the Mac's own clang; the Intel ones are built
-  # on the same Apple-silicon runner, which clang can do.
+  # Everything for a Mac: the two programs for each architecture (the Intel
+  # ones are built on the same Apple-silicon runner, which clang can do),
+  # and the app, for both in one. Signed with the Developer ID certificate,
+  # which lives in a keychain made for this run and removed after it, and
+  # notarized with an App Store Connect API key.
   macos:
+    needs: preflight
+    if: needs.preflight.outputs.mac == 'build'
     runs-on: macos-latest
-    timeout-minutes: 30
+    timeout-minutes: 90
+    env:
+      SIGN: ${{ needs.preflight.outputs.sign }}
     steps:
+      # The token stays out of .git/config: nothing here talks to GitHub.
       - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          persist-credentials: false
       - uses: actions/setup-go@d35c59abb061a4a6fb18e82ac0862c26744d6ab5 # v5.5.0
         with:
           go-version-file: go.mod
-      - run: scripts/release.sh darwin_arm64 darwin_amd64
+      - uses: pnpm/action-setup@b906affcce14559ad1aafd4ab0e942779e9f58b1 # v4.3.0
+        with:
+          version: 11
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with:
+          node-version: 22
+          cache: pnpm
+          cache-dependency-path: app/pnpm-lock.yaml
+      - name: Install tools
+        run: |
+          # The runner's Rust may be older than Cargo.toml's rust-version.
+          rustup toolchain install stable --profile minimal --no-self-update && rustup default stable
+          rustup target add aarch64-apple-darwin x86_64-apple-darwin
+          # Checks the updater's signature (scripts/mac-release.sh).
+          brew install minisign
+          # spctl's verdict is a check below; with assessments off it would
+          # accept anything.
+          sudo spctl --master-enable || true
+          spctl --status
+      - name: Install the app's dependencies
+        working-directory: app
+        run: pnpm install --frozen-lockfile
+      - name: Import the Developer ID certificate into a temporary keychain
+        if: env.SIGN == 'true'
+        env:
+          APPLE_CERTIFICATE: ${{ secrets.APPLE_CERTIFICATE }}
+          APPLE_CERTIFICATE_PASSWORD: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
+        run: |
+          export KEYCHAIN_PATH="$RUNNER_TEMP/leadline-signing.keychain-db"
+          echo "KEYCHAIN_PATH=$KEYCHAIN_PATH" >>"$GITHUB_ENV"
+          scripts/ci-keychain.sh create
+      - name: Write the App Store Connect API key
+        if: env.SIGN == 'true'
+        env:
+          APPLE_API_KEY_P8: ${{ secrets.APPLE_API_KEY_P8 }}
+        run: |
+          set -euo pipefail
+          umask 077
+          key="$RUNNER_TEMP/leadline-notary.p8"
+          # As the .p8 file's text, or as its base64: either is taken.
+          if grep -q "BEGIN PRIVATE KEY" <<<"$APPLE_API_KEY_P8"; then
+            printf '%s\n' "$APPLE_API_KEY_P8" >"$key"
+          else
+            printf '%s' "$APPLE_API_KEY_P8" | base64 --decode >"$key"
+          fi
+          echo "APPLE_API_KEY_PATH=$key" >>"$GITHUB_ENV"
+      - name: Build, sign and notarize leadline and leadlined
+        if: env.SIGN == 'true'
+        env:
+          APPLE_API_ISSUER: ${{ secrets.APPLE_API_ISSUER }}
+          APPLE_API_KEY: ${{ secrets.APPLE_API_KEY }}
+          LEADLINE_REQUIRE_SIGNED: "1"
+        run: scripts/release.sh darwin_arm64 darwin_amd64
+      - name: Build leadline and leadlined, unsigned
+        if: env.SIGN != 'true'
+        run: scripts/release.sh darwin_arm64 darwin_amd64
       - name: They start
         run: |
           test "$(dist/darwin_arm64/leadlined --version | cut -d' ' -f2)" = "$(cat VERSION)"
           dist/darwin_arm64/leadline version | head -1
+      - name: Build, sign, notarize and check the app
+        if: env.SIGN == 'true'
+        env:
+          APPLE_API_ISSUER: ${{ secrets.APPLE_API_ISSUER }}
+          APPLE_API_KEY: ${{ secrets.APPLE_API_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ""
+        run: scripts/mac-release.sh
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
           name: darwin
           path: dist/leadline_*.tar.gz
           if-no-files-found: error
+      - if: env.SIGN == 'true'
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: mac-app
+          path: dist/mac/
+          if-no-files-found: error
+      - name: Remove the keychain and the API key
+        if: always()
+        run: |
+          if [ -n "${KEYCHAIN_PATH:-}" ]; then scripts/ci-keychain.sh delete || true; fi
+          rm -f "$RUNNER_TEMP/leadline-notary.p8"
 
-  # Only for a tag: one list of checksums over all four tarballs, and the
-  # release. The installer is attached too, so that
-  # .../releases/latest/download/install.sh is always the one that goes with
-  # the newest release.
+  # Only for a pushed tag (a run by hand releases nothing, whatever it was
+  # run on), and only when everything before it passed: one list of
+  # checksums over all four tarballs, and the release. The installer is
+  # attached too, so that .../releases/latest/download/install.sh is always
+  # the one that goes with the newest release.
   publish:
-    if: startsWith(github.ref, 'refs/tags/')
-    needs: [linux, macos]
+    needs: [preflight, checks, linux, macos]
+    # macos is skipped when the Mac half came from scripts/publish.sh, and a
+    # skipped job would otherwise skip this one with it.
+    if: >-
+      ${{ !cancelled() && github.event_name == 'push' && startsWith(github.ref, 'refs/tags/')
+      && needs.checks.result == 'success' && needs.linux.result == 'success'
+      && (needs.macos.result == 'success' || (needs.macos.result == 'skipped' && needs.preflight.outputs.mac == 'published')) }}
     runs-on: ubuntu-24.04
-    timeout-minutes: 10
+    timeout-minutes: 15
     permissions:
       contents: write
+    env:
+      TAG: ${{ github.ref_name }}
+      MAC: ${{ needs.preflight.outputs.mac }}
+      GH_TOKEN: ${{ github.token }}
+      GH_REPO: ${{ github.repository }}
     steps:
       - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          persist-credentials: false
       - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
         with:
+          pattern: linux_*
           path: dist
           merge-multiple: true
+      - if: env.MAC == 'build'
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        with:
+          name: darwin
+          path: dist
+      - if: env.MAC == 'build'
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        with:
+          name: mac-app
+          path: dist/mac
+      # The macOS tarballs a Mac published are on the draft already; they are
+      # fetched only to be listed in checksums.txt.
+      - name: Fetch the macOS programs a Mac published
+        if: env.MAC == 'published'
+        run: gh release download "$TAG" --pattern 'leadline_*_darwin_*.tar.gz' --dir dist
       - run: scripts/release.sh checksums
       - name: All four are there
         run: test "$(wc -l < dist/checksums.txt)" -eq 4
       - name: Release
-        env:
-          GH_TOKEN: ${{ github.token }}
         run: |
-          gh release create "$GITHUB_REF_NAME" --verify-tag --title "$GITHUB_REF_NAME" --generate-notes \
-            dist/leadline_*.tar.gz dist/checksums.txt scripts/install.sh
+          set -euo pipefail
+          files=(dist/leadline_*_linux_*.tar.gz dist/checksums.txt scripts/install.sh)
+          if [ "$MAC" = build ]; then
+            # A rehearsal's files, or ones Apple never saw, are marked.
+            if [ -e dist/mac/NOT-A-RELEASE ]; then
+              echo "::error::dist/mac is marked NOT-A-RELEASE: $(cat dist/mac/NOT-A-RELEASE)"
+              exit 1
+            fi
+            files+=(dist/leadline_*_darwin_*.tar.gz dist/mac/Leadline-macos-universal.dmg
+              dist/mac/Leadline-macos-universal.app.tar.gz dist/mac/Leadline-macos-universal.app.tar.gz.sig)
+          fi
+          if gh release view "$TAG" >/dev/null 2>&1; then
+            # scripts/publish.sh made it, or an earlier run of this did.
+            gh release upload "$TAG" --clobber "${files[@]}"
+          else
+            gh release create "$TAG" --verify-tag --draft --title "Leadline $TAG" --generate-notes "${files[@]}"
+          fi
+          # The feed last, so it never points at an archive that is not
+          # there yet.
+          if [ "$MAC" = build ]; then gh release upload "$TAG" --clobber dist/mac/latest.json; fi
+          # Only now "latest": until here the last release stayed the one
+          # installed apps and install.sh find.
+          gh release edit "$TAG" --draft=false --latest

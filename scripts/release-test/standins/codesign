@@ -1,0 +1,28 @@
+#!/bin/sh
+# A stand-in for codesign, for scripts/release-test: the real codesign, kept
+# off the network. A signature made with --timestamp asks Apple's server for
+# the time, and a rehearsal sends nothing to Apple, so that one option
+# becomes --timestamp=none. Everything else is passed on as it came.
+#
+#   STANDIN_LOG   every signing call is added to this file.
+set -eu
+
+signing=no
+for a; do
+  case $a in -s | --sign | --sign=* | -s?*) signing=yes ;; esac
+done
+if [ "$signing" = no ]; then
+  exec /usr/bin/codesign "$@"
+fi
+[ -z "${STANDIN_LOG:-}" ] || echo "codesign $*" >>"$STANDIN_LOG"
+n=$#
+while [ "$n" -gt 0 ]; do
+  a=$1
+  shift
+  case $a in
+    --timestamp | --timestamp=*) ;;
+    *) set -- "$@" "$a" ;;
+  esac
+  n=$((n - 1))
+done
+exec /usr/bin/codesign --timestamp=none "$@"

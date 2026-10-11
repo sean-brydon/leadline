@@ -1,0 +1,58 @@
+#!/bin/sh
+# A stand-in for GitHub's command line, for scripts/release-test: it changes
+# nothing anywhere and keeps a note of what it was asked.
+#
+#   STANDIN_GH_DIR      where it keeps what it was told. A secret set with
+#                       `gh secret set NAME` becomes secrets/NAME, holding
+#                       the SHA-256 and the length of what came on stdin,
+#                       not the value.
+#   STANDIN_GH          "signed-out" makes `gh auth status` fail;
+#                       "released" makes `gh release view` find a release.
+#   STANDIN_LOG         every call is added to this file, with its
+#                       arguments (which must never hold a secret: one that
+#                       does fails the call).
+set -eu
+
+: "${STANDIN_GH_DIR:?the stand-in gh needs STANDIN_GH_DIR}"
+[ -z "${STANDIN_LOG:-}" ] || echo "gh $*" >>"$STANDIN_LOG"
+
+case "${1:-} ${2:-}" in
+  "auth status")
+    [ "${STANDIN_GH:-}" != signed-out ] || { echo "You are not logged into any GitHub hosts." >&2; exit 1; }
+    echo "github.com: logged in as acme (stand-in)"
+    ;;
+  "secret set")
+    name=$3
+    shift 3
+    for a; do
+      case $a in
+        --body | --body=* | -b | -b*)
+          echo "stand-in gh: $name's value came on the command line (--body), where ps shows it. It must come on stdin." >&2
+          exit 1 ;;
+      esac
+    done
+    [ ! -t 0 ] || { echo "stand-in gh: $name: nothing on stdin" >&2; exit 1; }
+    mkdir -p "$STANDIN_GH_DIR/secrets"
+    value=$(mktemp "$STANDIN_GH_DIR/.value.XXXXXX")
+    cat >"$value"
+    [ -s "$value" ] || { rm -f "$value"; echo "stand-in gh: $name: an empty value on stdin" >&2; exit 1; }
+    if command -v sha256sum >/dev/null 2>&1; then sum=$(sha256sum <"$value"); else sum=$(shasum -a 256 <"$value"); fi
+    echo "${sum%% *} $(wc -c <"$value" | tr -d ' ')" >"$STANDIN_GH_DIR/secrets/$name"
+    rm -f "$value"
+    echo "✓ Set Actions secret $name (stand-in)"
+    ;;
+  "secret list")
+    [ ! -d "$STANDIN_GH_DIR/secrets" ] || ls "$STANDIN_GH_DIR/secrets"
+    ;;
+  "release view")
+    [ "${STANDIN_GH:-}" = released ] || { echo "release not found" >&2; exit 1; }
+    echo "title: $3"
+    ;;
+  "release create" | "release upload" | "release edit" | "release delete")
+    echo "stand-in gh: $1 $2 $3 (nothing was sent)"
+    ;;
+  *)
+    echo "stand-in gh: doesn't know: gh $*" >&2
+    exit 1
+    ;;
+esac

@@ -12,34 +12,36 @@ import {
   MonitorIcon,
   PanelLeftIcon,
   PlusIcon,
+  ServerIcon,
   SquareTerminalIcon,
   TablePropertiesIcon,
   ZapIcon,
 } from "lucide-react";
 import type { Box } from "@/lib/api";
-import { boxState } from "@/lib/discover";
 import { fmtRate } from "@/lib/format";
-import { machines as machineList } from "@/lib/machines";
+import { machines as machineList, reach } from "@/lib/machines";
 import { useMachines } from "@/lib/live";
 import { ALL, sameSource, sourceKey, type Source, type View } from "@/lib/scope";
 import { byProject, ownerLine, total, type AppRow, type DbRow, type Entry, type Model, type Tone } from "@/lib/sources";
 import { cn } from "@/lib/utils";
+import { openAddMachine } from "@/components/AddMachine";
 import { Dot, Tip } from "@/components/ui";
 import { Button } from "@/components/ui/button";
-import { Menu, MenuGroupLabel, MenuGroup, MenuPopup, MenuRadioGroup, MenuRadioItem, MenuSeparator, MenuTrigger } from "@/components/ui/menu";
+import { Menu, MenuGroupLabel, MenuGroup, MenuItem, MenuPopup, MenuRadioGroup, MenuRadioItem, MenuSeparator, MenuTrigger } from "@/components/ui/menu";
 import { Spinner } from "@/components/ui/spinner";
 
-export type Page = View | "Sources";
+export type Page = View | "Sources" | "Machines";
 
 /**
  * What the window knows of the owner's Shipyard boxes, and the way to ask.
  * Asking makes the daemon run Shipyard's command line, which can start
- * Shipyard's own background agent, so it happens when a person opens the
- * machine switcher or reaches the foot of a scan, and at no other time.
+ * Shipyard's own background agent, so it happens when a person reaches the
+ * foot of a scan, and at no other time. (The Add a machine dialog asks for
+ * itself, when it opens.)
  */
 export type Boxes = {
   boxes: Box[];
-  /** Shipyard had boxes when it was last asked, in this window or an earlier one: the switcher is worth drawing. */
+  /** Shipyard had boxes when it was last asked, in this window or an earlier one. */
   known: boolean;
   asking: boolean;
   /** Shipyard has been asked in this window, and has answered. */
@@ -100,8 +102,6 @@ type Props = {
   lights: boolean;
   /** What is kept on disk, for the foot of the sidebar. */
   kept: ReactNode;
-  /** The owner's Shipyard boxes: listed with the machines, since Leadline can't run on one yet, and asked for when the list is opened. */
-  boxes?: Boxes;
 };
 
 /**
@@ -109,9 +109,7 @@ type Props = {
  * Leadline, each with its status. A source narrows every view to it. Up and
  * down arrows move along it; Tab does too.
  */
-const NO_SHIPYARD: Boxes = { boxes: [], known: false, asking: false, asked: false, ask: () => {} };
-
-export function Sidebar({ page, onPage, source, onSource, model, rates, onAdd, rail, onFold, lights, kept, boxes = NO_SHIPYARD }: Props) {
+export function Sidebar({ page, onPage, source, onSource, model, rates, onAdd, rail, onFold, lights, kept }: Props) {
   const arrows = (e: KeyboardEvent<HTMLElement>) => {
     if (e.key !== "ArrowDown" && e.key !== "ArrowUp") return;
     const stops = [...e.currentTarget.querySelectorAll<HTMLElement>("[data-stop]")];
@@ -138,7 +136,7 @@ export function Sidebar({ page, onPage, source, onSource, model, rates, onAdd, r
           </div>
         )}
 
-        <Machines rail={rail} shipyard={boxes} />
+        <Machines rail={rail} on={page === "Machines"} onManage={() => onPage("Machines")} />
 
         <nav aria-label="Views" className={cn("flex shrink-0 flex-col gap-px", rail ? "items-center px-0" : "px-2")}>
           {VIEWS.map(({ page: p, icon }) => (
@@ -403,28 +401,21 @@ function Db({ row, name, rail, on, rate, onSource }: { row: DbRow; name?: string
 }
 
 /**
- * Machines picks which machine's daemon the window shows. It is only drawn
- * when there is something to say about machines: more than one to pick
- * from, or Shipyard boxes to list. With this Mac alone and no boxes, which
- * is most installs, the sidebar has nothing about machines in it.
+ * Machines picks which machine's Leadline the window shows, and is the way
+ * to the others: adding one, and the Machines view where they are renamed
+ * and removed. It is always drawn, with this Mac alone too, so there is
+ * one place to look for another machine.
  *
- * Shipyard is asked for its boxes when the list is opened, not before: the
- * asking runs Shipyard's own command. Whether to draw the switcher for
- * boxes alone goes by what Shipyard said the last time it was asked.
- *
- * A Shipyard box is listed and can't be picked: Leadline can't run on one
- * yet. It is words in the popup, not an item, so there is nothing to press
- * that does nothing.
+ * Opening it asks nothing of anyone: the list is the window's own, and
+ * Shipyard is only asked once "Add a machine" has been pressed.
  */
-function Machines({ rail, shipyard }: { rail: boolean; shipyard: Boxes }) {
+function Machines({ rail, on, onManage }: { rail: boolean; /** The Machines view is open. */ on: boolean; onManage: () => void }) {
   const { machines, current } = useMachines();
-  const { boxes } = shipyard;
-  if (machines.length < 2 && boxes.length === 0 && !shipyard.known) return null;
   const now = machines.find((m) => m.id === current) ?? machines[0];
-  const nowMs = Date.now();
+  const Glyph = reach(now) === "shipyard" ? ServerIcon : reach(now) === "address" ? CableIcon : MonitorIcon;
   return (
     <div className={cn("shrink-0 pb-2", rail ? "flex justify-center" : "px-2")}>
-      <Menu onOpenChange={(open) => open && shipyard.ask()}>
+      <Menu>
         <Tip label={`Machine: ${now.name}`} side="right">
           <MenuTrigger
             render={
@@ -435,7 +426,7 @@ function Machines({ rail, shipyard }: { rail: boolean; shipyard: Boxes }) {
               )
             }
           >
-            <MonitorIcon />
+            <Glyph />
             {!rail && (
               <>
                 <span className="min-w-0 flex-1 truncate text-left">{now.name}</span>
@@ -446,7 +437,7 @@ function Machines({ rail, shipyard }: { rail: boolean; shipyard: Boxes }) {
         </Tip>
         <MenuPopup align="start" side={rail ? "right" : "bottom"} className="max-w-72 min-w-56">
           <MenuGroup>
-            <MenuGroupLabel>Show the daemon on</MenuGroupLabel>
+            <MenuGroupLabel>Show the Leadline on</MenuGroupLabel>
             <MenuRadioGroup value={current} onValueChange={(id) => machineList.use(id as string)}>
               {machines.map((m) => (
                 <MenuRadioItem key={m.id} value={m.id}>
@@ -458,37 +449,15 @@ function Machines({ rail, shipyard }: { rail: boolean; shipyard: Boxes }) {
               ))}
             </MenuRadioGroup>
           </MenuGroup>
-          {boxes.length > 0 ? (
-            <>
-              <MenuSeparator />
-              <div role="group" aria-label="Your Shipyard boxes" className="px-2 pt-1 pb-1.5">
-                <div className="pb-1 text-xs font-medium text-muted-foreground">Your Shipyard boxes</div>
-                <ul className="flex flex-col gap-1">
-                  {boxes.map((b) => (
-                    <li key={b.name} className="flex min-w-0 items-center gap-2 text-sm">
-                      <Dot tone={b.state === "online" ? "ok" : "quiet"} />
-                      <span className="truncate">{b.name}</span>
-                      <span className="ml-auto shrink-0 text-[11.5px] text-muted-foreground">{boxState(b, nowMs)}</span>
-                    </li>
-                  ))}
-                </ul>
-                <p className="pt-1.5 text-[11.5px] leading-snug text-pretty text-muted-foreground">Leadline can't run on a box yet, so there is nothing to switch to there.</p>
-              </div>
-            </>
-          ) : shipyard.asking ? (
-            <>
-              <MenuSeparator />
-              <p role="status" className="flex items-center gap-2 px-2 pt-1 pb-1.5 text-[11.5px] text-muted-foreground">
-                <Spinner aria-hidden className="size-3" />
-                Asking Shipyard for your boxes…
-              </p>
-            </>
-          ) : shipyard.known && shipyard.asked ? (
-            <>
-              <MenuSeparator />
-              <p className="px-2 pt-1 pb-1.5 text-[11.5px] leading-snug text-pretty text-muted-foreground">Shipyard has no boxes to list now.</p>
-            </>
-          ) : null}
+          <MenuSeparator />
+          <MenuItem onClick={openAddMachine}>
+            <PlusIcon />
+            Add a machine…
+          </MenuItem>
+          <MenuItem onClick={onManage} aria-current={on ? "page" : undefined}>
+            <ServerIcon />
+            Manage machines
+          </MenuItem>
         </MenuPopup>
       </Menu>
     </div>

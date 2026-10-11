@@ -74,6 +74,8 @@ ssh -N -L 4336:127.0.0.1:4320 you@server
 
 The server's daemon is then `http://127.0.0.1:4336` on the laptop (4320 there is the laptop's own Leadline), for anything that takes an address: `LEADLINE_URL=http://127.0.0.1:4336 leadline doctor`, `curl http://127.0.0.1:4336/api/summary`, or `claude mcp add --transport http leadline-server http://127.0.0.1:4336/mcp`. The desktop app shows the Mac's own daemon; switching it to a forwarded one is on its way.
 
+In the desktop app, open the machine switcher at the top of the sidebar and choose Add a machine: pick one of your Shipyard boxes (Leadline opens the forward for you) or give the address you forwarded (`127.0.0.1:4336`). Manage machines lists them, with rename and remove; removing forgets the machine and closes a forward Leadline opened, and uninstalls nothing.
+
 On a Mac the app runs the daemon. For the command line, `make install` in a checkout puts `leadline` and `leadlined` in `~/.local/bin`.
 
 ## Use it from a coding agent
@@ -106,6 +108,33 @@ When the app is showing a daemon on another machine, that daemon writes the brie
 
 Everything is in one DuckDB file in `~/.leadline`. Data older than 72 hours is dropped, and the oldest goes early once the file passes 2 GB (`leadlined -retain 7d -max-size 5GB`). The daemon answers only on localhost.
 
+## Releases, and checking a download
+
+A release is on [GitHub](https://github.com/sean-brydon/leadline/releases): the desktop app for macOS 13 and later, on Apple silicon and Intel alike (`Leadline-macos-universal.dmg`), and `leadline` and `leadlined` as tarballs for macOS and Linux, each on arm64 and x86-64.
+
+- **The Mac app and the Mac programs are signed** with the developer's Apple Developer ID (`sean brydon`, team `RA7884R39N`), with the hardened runtime and no entitlements, **and notarized by Apple**. The app and its dmg carry Apple's ticket, so they open on a Mac that is offline. The bare programs can't carry one: the first time one runs, macOS asks Apple about it, which needs the network once if you downloaded it with a browser.
+- **The app updates itself** from the latest release. It only installs an update that is signed with Leadline's own update key, whose public half is built into the app, and it restarts only when you press **Restart to update**. Its daemon restarts with it.
+- **The Linux programs are not signed.** `install.sh` checks what it downloads against the release's `checksums.txt`, and installs nothing it could not check.
+
+To check a download yourself:
+
+```sh
+spctl -a -vv /Applications/Leadline.app              # source=Notarized Developer ID, origin=Developer ID Application: sean brydon (RA7884R39N)
+xcrun stapler validate ~/Downloads/Leadline-macos-universal.dmg
+codesign --verify --deep --strict /Applications/Leadline.app && codesign -dv --verbose=2 /Applications/Leadline.app 2>&1 | grep -E 'Authority|TeamIdentifier|flags'
+
+# The programs from a tarball: the signature, and Apple's ticket for it.
+codesign --verify --strict -R=notarized --check-notarization ./leadline ./leadlined
+# Any tarball, against the list published with it.
+shasum -a 256 -c --ignore-missing checksums.txt
+```
+
+`AGENTS.md`, "Versions and releases", says how a release is built, signed and checked, and `make rehearse` runs a whole one with stand-in credentials.
+
 ## Working on it
 
 `AGENTS.md` has the layout, the checks (`make check`) and the rules.
+
+## Licence
+
+MIT. See [LICENSE](LICENSE).

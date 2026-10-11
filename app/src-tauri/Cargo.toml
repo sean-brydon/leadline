@@ -3,6 +3,7 @@ name = "leadline"
 version = "0.0.1"
 description = "Leadline: traces, queries and logs for local development"
 authors = ["Sean Brydon"]
+license = "MIT"
 edition = "2021"
 # File::try_lock (src/daemon.rs).
 rust-version = "1.89"
@@ -15,11 +16,15 @@ crate-type = ["staticlib", "cdylib", "rlib"]
 
 [build-dependencies]
 tauri-build = { version = "2", features = [] }
+# build.rs reads the updater's public key out of the config.
+serde_json = "1"
 
 [dependencies]
 tauri = { version = "2", features = [] }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
+# The app updates itself from the latest GitHub release (src/update.rs).
+tauri-plugin-updater = "2"
 
 [target.'cfg(unix)'.dependencies]
 # For signals: the daemon is stopped with SIGTERM (src/daemon.rs).

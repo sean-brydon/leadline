@@ -1,0 +1,90 @@
+#!/bin/sh
+# A stand-in for 1Password's command line, for scripts/release-test: it
+# answers `op read` from files in a folder, so the release scripts can be
+# run end to end without a real secret anywhere near them.
+#
+#   STANDIN_OP_DIR   the folder. A reference op://Vault/Item/field is the
+#                    file Vault/Item/field under it.
+#   STANDIN_OP       "signed-out" makes every read fail the way a signed-out
+#                    op does; anything else reads.
+#   STANDIN_LOG      every call is added to this file: the command and the
+#                    reference, never a value.
+#
+# A reference with no file fails the way op does for a field an item lacks.
+# `op item get` says whether an item's folder is there, and `op item create`
+# takes an item as JSON on stdin, as the real one does with "-".
+set -eu
+
+: "${STANDIN_OP_DIR:?the stand-in op needs STANDIN_OP_DIR}"
+log() { [ -z "${STANDIN_LOG:-}" ] || echo "op $*" >>"$STANDIN_LOG"; }
+fail() {
+  echo "[ERROR] $(date '+%Y/%m/%d %H:%M:%S') $*" >&2
+  exit 1
+}
+signed_in() { [ "${STANDIN_OP:-}" != signed-out ] || fail "account is not signed in"; }
+
+case ${1:-} in
+  --version) echo "2.0.0-standin" ;;
+  whoami)
+    log whoami
+    signed_in
+    echo "URL: acme.example"
+    ;;
+  read)
+    ref=${2:-}
+    log "read $ref"
+    signed_in
+    case $ref in
+      op://*/*/*) ;;
+      *) fail "could not read secret '$ref': invalid secret reference" ;;
+    esac
+    path=${ref#op://}
+    vault=${path%%/*}
+    rest=${path#*/}
+    item=${rest%%/*}
+    field=${rest#*/}
+    [ -d "$STANDIN_OP_DIR/$vault/$item" ] || fail "could not read secret '$ref': \"$item\" isn't an item in the \"$vault\" vault"
+    [ -f "$STANDIN_OP_DIR/$path" ] || fail "could not read secret '$ref': item '$vault/$item' does not have a field '$field'"
+    cat "$STANDIN_OP_DIR/$path"
+    ;;
+  item)
+    case ${2:-} in
+      get)
+        log "item get $3"
+        signed_in
+        vault=Personal
+        for a; do case $a in --vault=*) vault=${a#--vault=} ;; esac; done
+        [ -d "$STANDIN_OP_DIR/$vault/$3" ] || fail "\"$3\" isn't an item in the \"$vault\" vault"
+        echo "{\"title\": \"$3\"}"
+        ;;
+      create)
+        signed_in
+        vault=Personal
+        stdin=no
+        for a; do
+          case $a in
+            --vault=*) vault=${a#--vault=} ;;
+            -) stdin=yes ;;
+            *=*) fail "the stand-in takes an item on stdin only: a value on the command line would show in ps" ;;
+          esac
+        done
+        [ "$stdin" = yes ] || fail "the stand-in takes an item on stdin only (op item create -)"
+        # The item's fields become files, as `read` expects them.
+        python3 -c '
+import json, os, sys
+root, vault = sys.argv[1:3]
+item = json.load(sys.stdin)
+folder = os.path.join(root, vault, item["title"])
+os.makedirs(folder)
+for field in item.get("fields", []):
+    with open(os.open(os.path.join(folder, field["label"]), os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600), "w") as f:
+        f.write(field["value"])
+print(item["title"])
+' "$STANDIN_OP_DIR" "$vault" >"$STANDIN_OP_DIR/.created" || fail "the item could not be created"
+        log "item create $(cat "$STANDIN_OP_DIR/.created") --vault=$vault (from stdin)"
+        ;;
+      *) fail "the stand-in op doesn't know: op $*" ;;
+    esac
+    ;;
+  *) fail "the stand-in op doesn't know: op $*" ;;
+esac

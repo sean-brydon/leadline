@@ -13,7 +13,7 @@ LDFLAGS := -X $(VERSION_PKG).Version=$(VERSION) -X $(VERSION_PKG).Commit=$(COMMI
 # Where `make install` puts the two programs: $(PREFIX)/bin.
 PREFIX ?= $(HOME)/.local
 
-.PHONY: dev build install check app demo linux release
+.PHONY: dev build install check app demo linux release publish release-check rehearse updater-test
 
 # The app from source. It builds the daemon from source too and runs it, as
 # the bundled app does, logging to ~/.leadline/leadlined.log. To watch the
@@ -47,6 +47,8 @@ check:
 	$(GO) vet ./...
 	$(GO) test -race ./...
 	scripts/install_test.sh
+	scripts/version.sh
+	scripts/release-test/credentials_test.sh
 	scripts/sidecar.sh
 	cd app/src-tauri && cargo check && cargo test
 	cd app && CI=true pnpm install --frozen-lockfile && pnpm test && pnpm build
@@ -64,8 +66,35 @@ linux:
 
 # A release's files into dist/: a tarball of the two programs for Linux and
 # macOS on each architecture, and checksums.txt. AGENTS.md has the steps.
+# The macOS ones are signed and notarized when the environment says how
+# (scripts/release.sh), and say so when they are not.
 release:
 	scripts/release.sh
+
+# The macOS half of a release from this Mac: the app and the two programs,
+# signed with the Developer ID in the keychain, notarized, checked, opened
+# once, and put on GitHub as a draft that the tag's workflow completes.
+# Credentials come from the environment, else from 1Password
+# (scripts/publish.sh). NOTES="What changed" is the release's text.
+publish:
+	NOTES="$(NOTES)" scripts/publish.sh
+
+# What to be sure of before a tag: every check, then the app out of its dmg,
+# opened in a folder and on data of its own (scripts/release-check.sh).
+# Quit Leadline first: the app's daemon has one port. DMG=path tries that
+# dmg instead of building one.
+release-check:
+	scripts/release-check.sh $(if $(DMG),--dmg $(DMG))
+
+# A whole release from this Mac with stand-ins for every credential and for
+# Apple, and nothing pushed or uploaded (scripts/release-test/rehearse.sh).
+rehearse:
+	scripts/release-test/rehearse.sh
+
+# An installed app updating itself to the next version, from a feed on this
+# machine (scripts/release-test/updater-test.sh). Two builds: it takes a while.
+updater-test:
+	scripts/release-test/updater-test.sh
 
 # Made-up traces and logs, sent to the daemon that is running.
 demo:

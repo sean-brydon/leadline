@@ -10,6 +10,7 @@ import (
 	"os"
 	"path/filepath"
 	"sort"
+	"strconv"
 	"strings"
 )
 
@@ -51,10 +52,25 @@ const (
 //	agents.json            `berth agents BOX --json`
 //	task.sh                sourced before `task new` answers: `exit 1`
 //	                       after a line on stderr makes it fail
+//	forwards.tsv           the forwards it holds, one a line:
+//	                       "ID BOX LOCAL REMOTE STATE", as in
+//	                       "9f3a1c2e hetzner-1 14320 4320 listening"
+//	forward.sh             sourced before `forward` opens one, with $box,
+//	                       $local and $remote set: it can fail the way
+//	                       task.sh does, or start something listening on
+//	                       $local to stand in for the box
+//	unforward.sh           sourced before `unforward` closes one, with $id
+//	                       and, when the forward is there, $box and $local
 //
 // Every run adds a line to runs.log (the command and its box, never a
 // prompt), and every `task new` writes its arguments, NUL after each, to
 // task-N.args, and its environment to task-N.env.
+//
+// A forward here forwards nothing: `forward` writes a line to
+// forwards.tsv and answers as the real command does, `forwards` prints
+// those lines as JSON, and `unforward` takes one out. Like the real one,
+// it refuses a box it does not list and a local port a forward already
+// has, and it does open a forward to a box that is offline.
 func Write(dir string) (string, error) {
 	files := map[string]string{"boxes.json": Boxes, "locations.json": Locations, "agents.json": Agents}
 	for name, body := range files {
@@ -92,6 +108,69 @@ task)
 }
 JSON
   ;;
+forwards)
+  echo "forwards" >> "$dir/runs.log"
+  printf '['
+  sep=''
+  if [ -f "$dir/forwards.tsv" ]; then
+    while read -r id box local remote state rest; do
+      [ -n "$id" ] || continue
+      printf '%s\n  {"id":"%s","box":"%s","local":%s,"remote":%s,"state":"%s"' "$sep" "$id" "$box" "$local" "$remote" "${state:-listening}"
+      if [ -n "$rest" ]; then printf ',"error":"%s"' "$rest"; fi
+      printf '}'
+      sep=','
+    done < "$dir/forwards.tsv"
+  fi
+  if [ -n "$sep" ]; then printf '\n'; fi
+  echo ']' ;;
+forward)
+  echo "forward $2 $3" >> "$dir/runs.log"
+  box=$2
+  local=${3%%:*}
+  remote=${3##*:}
+  if ! grep -q "\"name\":\"$box\"" "$dir/boxes.json"; then
+    echo "berth: localhost:$local: no paired box named \"$box\"" >&2
+    exit 1
+  fi
+  if [ -f "$dir/forwards.tsv" ] && grep -q "^[^ ]* [^ ]* $local " "$dir/forwards.tsv"; then
+    echo "berth: localhost:$local: local port $local is in use: listen tcp 127.0.0.1:$local: bind: address already in use" >&2
+    exit 1
+  fi
+  if [ -f "$dir/forward.sh" ]; then . "$dir/forward.sh"; fi
+  n=$(cat "$dir/forwards.count" 2>/dev/null || echo 0)
+  echo $((n + 1)) > "$dir/forwards.count"
+  id=$(printf 'f%07x' "$n")
+  echo "$id $box $local $remote listening" >> "$dir/forwards.tsv"
+  cat <<JSON
+[
+  {
+    "id": "$id",
+    "box": "$box",
+    "local": $local,
+    "remote": $remote
+  }
+]
+JSON
+  ;;
+unforward)
+  echo "unforward $2" >> "$dir/runs.log"
+  id=$2
+  box=''
+  local=''
+  remote=''
+  if [ -f "$dir/forwards.tsv" ]; then
+    while read -r fid fbox flocal fremote rest; do
+      if [ "$fid" = "$id" ]; then box=$fbox; local=$flocal; remote=$fremote; fi
+    done < "$dir/forwards.tsv"
+  fi
+  if [ -f "$dir/unforward.sh" ]; then . "$dir/unforward.sh"; fi
+  if [ -z "$box" ]; then
+    echo "berth: no forward with that id" >&2
+    exit 1
+  fi
+  grep -v "^$id " "$dir/forwards.tsv" > "$dir/forwards.tmp"
+  mv "$dir/forwards.tmp" "$dir/forwards.tsv"
+  echo "Stopped localhost:$local → $box:$remote" ;;
 *)
   echo "other $*" >> "$dir/runs.log"
   echo "berth: this command must never be run" >&2
@@ -102,7 +181,8 @@ esac
 }
 
 // Runs lists what the script was run with, one line a run: "boxes",
-// "locations hetzner-1", "agents hetzner-1", "task new hetzner-1/acme/x".
+// "locations hetzner-1", "agents hetzner-1", "task new hetzner-1/acme/x",
+// "forwards", "forward hetzner-1 14320:4320", "unforward f0000000".
 func Runs(dir string) []string {
 	b, err := os.ReadFile(filepath.Join(dir, "runs.log"))
 	if err != nil || len(bytes.TrimSpace(b)) == 0 {
@@ -142,4 +222,35 @@ func TaskEnv(dir string, n int) string {
 	}
 	b, _ := os.ReadFile(names[n])
 	return string(b)
+}
+
+// Forward is one forward the script holds.
+type Forward struct {
+	ID, Box       string
+	Local, Remote int
+	State         string
+}
+
+// Forwards lists the forwards the script holds now: the ones `forward`
+// opened and a test wrote, less the ones `unforward` closed.
+func Forwards(dir string) []Forward {
+	b, err := os.ReadFile(filepath.Join(dir, "forwards.tsv"))
+	if err != nil {
+		return nil
+	}
+	var out []Forward
+	for _, line := range strings.Split(string(b), "\n") {
+		f := strings.Fields(line)
+		if len(f) < 4 {
+			continue
+		}
+		fw := Forward{ID: f[0], Box: f[1], State: "listening"}
+		fw.Local, _ = strconv.Atoi(f[2])
+		fw.Remote, _ = strconv.Atoi(f[3])
+		if len(f) > 4 {
+			fw.State = f[4]
+		}
+		out = append(out, fw)
+	}
+	return out
 }

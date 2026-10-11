@@ -21,7 +21,9 @@ file: the app's dialog is written from it.
 
 The four `brief` routes read the store and nothing else. The two `targets`
 routes run Shipyard's command line, reading only. `POST /api/shipyard/tasks`
-is the one route in the daemon that starts anything outside Leadline, and it
+is the one route in the daemon that starts a coding agent (the only other
+routes that change anything outside Leadline open and close a Shipyard port
+forward, when a person adds or removes a machine), and it
 does so once, for the request it was sent: nothing starts a task on a timer,
 because data arrived, or as a side effect of any other route. See
 [What runs `berth`, and when](#what-runs-berth-and-when).

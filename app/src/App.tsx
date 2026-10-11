@@ -5,11 +5,12 @@ import { api, type Box, type EndpointKey, type QueryKey, type Scope, type Source
 import { boxesOf } from "@/lib/discover";
 import { startDaemon, useDaemon, type DaemonStatus } from "@/lib/daemon";
 import { kept as keptOf } from "@/lib/kept";
-import { useConnected, useEvery, useLive, useMachine } from "@/lib/live";
-import { LOCAL_ID, machines, type Machine } from "@/lib/machines";
+import { useConnected, useEvery, useLive, useMachine, useMachines } from "@/lib/live";
+import { hereOf, LOCAL_ID, type Machine } from "@/lib/machines";
 import { ALL, sameSource, scopeNote, scopeOf, sourceKey, sourceName, type Source } from "@/lib/scope";
 import { captured, model as modelOf, ratePerMin, sampled, tally, type Model, type Sample } from "@/lib/sources";
 import { cn } from "@/lib/utils";
+import { AddMachine } from "@/components/AddMachine";
 import { AddSource, FirstRun } from "@/components/AddSource";
 import { LookAround, useLook } from "@/components/LookAround";
 import { PAST_LIGHTS_RAIL, Sidebar, STRIP, type AddKind, type Boxes, type Page } from "@/components/Sidebar";
@@ -20,12 +21,14 @@ import { Spinner } from "@/components/ui/spinner";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import { Overview } from "@/views/Overview";
 import { SendProvider } from "@/components/SendToShipyard";
+import { UpdateNotice } from "@/components/UpdateNotice";
 import { Endpoints } from "@/views/Endpoints";
 import { Traces } from "@/views/Traces";
 import { Queries } from "@/views/Queries";
 import { Logs } from "@/views/Logs";
 import { Metrics } from "@/views/Metrics";
 import { Sources } from "@/views/Sources";
+import { Machines, Unreachable, useSeen } from "@/views/Machines";
 
 const RANGES = [
   { label: "5m", ms: 5 * 60_000 },
@@ -129,16 +132,22 @@ function Shell({ machine }: { machine: Machine }) {
   // On the Sources page: the connection whose stats are open.
   const [stats, setStats] = useState<string | null>(null);
   const [adding, setAdding] = useState<{ open: boolean; kind: AddKind }>({ open: false, kind: "app" });
-  // Looking around: the scan of this machine, which a first run offers and
-  // "Look for more" starts later. Only this Mac's daemon is asked to: a
-  // daemon on another machine would look around that one. Nothing is asked
-  // of it here: a scan starts when a button is pressed (scanner.start), and
-  // Shipyard is asked for its boxes when a person opens the machine
-  // switcher or reaches the foot of a scan (shipyard.ask).
+  // Looking around: a scan of the machine whose daemon the window shows,
+  // made by that daemon, which a first run offers and "Look for more"
+  // starts later. Turned to another machine, it is that machine that is
+  // looked around, and the screens say so (`here`). Nothing is asked of the
+  // daemon here: a scan starts when a button is pressed (scanner.start).
+  // Shipyard is on this computer, so it is this Mac's daemon that is asked
+  // for its boxes, when a person reaches the foot of a scan (shipyard.ask).
   const local = machine.id === LOCAL_ID;
-  const scanner = useLook(local && connected);
-  const canScan = local && connected && !scanner.old;
+  // The machine in a sentence: "this Mac", or the name of the one being looked at.
+  const here = hereOf(machine);
+  const scanner = useLook(connected, machine.id);
+  const canScan = connected && !scanner.old;
   const shipyard = useBoxes(local && connected);
+  const machineCount = useMachines().machines.length;
+  // While its Leadline answers, a machine's "last reached" is kept up to date.
+  useSeen(machine, connected);
   const [looking, setLooking] = useState(false);
   // On a first run: the person chose to add sources by hand instead, starting at this kind; or chose to go on to the views before anything arrived.
   const [byHand, setByHand] = useState<AddKind | null>(null);
@@ -187,7 +196,7 @@ function Shell({ machine }: { machine: Machine }) {
     else if (!nothing) setWelcome(false);
   };
   const add = (kind?: AddKind) => setAdding({ open: true, kind: kind ?? "app" });
-  // A press of "Look for more" or "Look around this Mac": the press is what starts the scan.
+  // A press of "Look for more" or "Look around this Mac" (or the machine being shown): the press is what starts the scan.
   const look = () => {
     setAdding((a) => ({ ...a, open: false }));
     setByHand(null);
@@ -197,7 +206,7 @@ function Shell({ machine }: { machine: Machine }) {
     scanner.start();
   };
 
-  const view = page === "Sources" ? null : page;
+  const view = page === "Sources" || page === "Machines" ? null : page;
   const down = !connected && (sources === undefined || (machine.id === LOCAL_ID && daemon?.state === "failed"));
   const first = (welcome || nothing) && !moved && view !== null;
   // Looking around takes the whole view: on a first run, unless the person chose to add by hand, and later when asked for.
@@ -221,16 +230,18 @@ function Shell({ machine }: { machine: Machine }) {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [scanner.old]);
   const note = view && !down && !first && !scanning ? scopeNote(view, source) : null;
-  const kept = keptOf(machine.id === LOCAL_ID ? "this Mac" : machine.name, summary, storage, sources?.now_ms ?? Date.now());
+  const kept = keptOf(here, summary, storage, sources?.now_ms ?? Date.now(), !local);
 
   return (
     <div className="flex h-full">
-      <Sidebar page={page} onPage={go} source={source} onSource={pick} model={down ? undefined : model} rates={rates} onAdd={add} rail={rail} onFold={() => setFold(!rail)} lights={lights} kept={kept.short} boxes={shipyard} />
+      <Sidebar page={page} onPage={go} source={source} onSource={pick} model={down ? undefined : model} rates={rates} onAdd={add} rail={rail} onFold={() => setFold(!rail)} lights={lights} kept={kept.short} />
       <div className="flex min-w-0 flex-1 flex-col">
         {/* "deep": a press anywhere in the bar that isn't on a control drags the window. */}
         <header data-tauri-drag-region="deep" className={cn("flex shrink-0 items-center gap-2.5 border-b pr-3", STRIP, rail && lights ? PAST_LIGHTS_RAIL : "pl-3.5")}>
           <h1 className="shrink-0 font-medium">{page}</h1>
-          {scanning ? (
+          {page === "Machines" ? (
+            <span className="truncate text-muted-foreground">{machineCount === 1 ? "This Mac alone" : `${machineCount} machines`}</span>
+          ) : scanning ? (
             <span className="truncate text-muted-foreground">{scanner.started ? "Looking around" : "Nothing connected yet"}</span>
           ) : page === "Sources" ? (
             <span className="truncate text-muted-foreground">{model ? tally(model) : ""}</span>
@@ -241,7 +252,7 @@ function Shell({ machine }: { machine: Machine }) {
           )}
           <div className="ml-auto flex min-w-0 shrink-0 items-center gap-2 pl-2">
             {page === "Sources" && !scanning && canScan && (
-              <Tip label="Look at what is running on this Mac, and in folders you name, for more to connect. It opens no env file until you tick its project.">
+              <Tip label={`Look at what is running on ${here}, and in folders you name, for more to connect. It opens no env file until you tick its project.`}>
                 <Button variant="outline" size="sm" onClick={look} className="font-normal">
                   <ScanSearchIcon />
                   {/* At the window's narrowest the icon says it alone. */}
@@ -255,8 +266,9 @@ function Shell({ machine }: { machine: Machine }) {
                 Add source
               </Button>
             )}
+            <UpdateNotice />
             <PickOne label="Time range" value={String(rangeMs)} options={RANGE_OPTIONS} onChange={(v) => setRangeMs(Number(v))} />
-            <Tip label={connected ? `Showing what reaches the daemon at ${machine.url}, as it arrives.` : `No answer from the daemon at ${machine.url}.`}>
+            <Tip label={connected ? `Showing what reaches the daemon ${local ? "" : `on ${here}, `}at ${machine.url}, as it arrives.` : `No answer from the daemon ${local ? "" : `on ${here}, `}at ${machine.url}.`}>
               <span role="status" className="flex shrink-0 items-center gap-1.5 pl-1 text-[11px] text-muted-foreground">
                 <span className={cn("size-1.5 rounded-full", connected ? "bg-ok" : "bg-err")} />
                 {/* At the window's narrowest the dot says it alone. */}
@@ -269,15 +281,19 @@ function Shell({ machine }: { machine: Machine }) {
         <main className="min-h-0 flex-1">
           {/* The views' "Send to Shipyard" opens one dialog, held here. */}
           <SendProvider scope={scope}>
-            {down ? (
-              <NoDaemon daemon={machine.id === LOCAL_ID ? daemon : null} machine={machine} />
+            {page === "Machines" ? (
+              // The list of machines is this window's own: it is there whether or not the one being shown answers.
+              <Machines />
+            ) : down ? (
+              <NoDaemon daemon={machine.id === LOCAL_ID ? daemon : null} machine={machine} onMachines={() => go("Machines")} />
             ) : scanning ? (
               <LookAround
                 look={scanner}
                 first={first}
-                here="this Mac"
+                here={here}
                 boxes={shipyard.boxes}
                 onFoot={shipyard.ask}
+                onMachines={() => go("Machines")}
                 onByHand={(kind) => {
                   // A first run has the by-hand panel in the page; later it is the dialog.
                   if (first) setByHand(kind ?? "app");
@@ -309,7 +325,7 @@ function Shell({ machine }: { machine: Machine }) {
                 kept={kept}
               />
             ) : first ? (
-              <FirstRun kind={byHand ?? "app"} arrived={!nothing} onGo={() => go("Overview")} onChanged={again} onStats={openStats} onLook={canScan ? look : undefined} lookNote={local && scanner.old ? TOO_OLD : undefined} />
+              <FirstRun kind={byHand ?? "app"} arrived={!nothing} onGo={() => go("Overview")} onChanged={again} onStats={openStats} onLook={canScan ? look : undefined} lookNote={scanner.old ? TOO_OLD : undefined} />
             ) : page === "Overview" ? (
               <Overview scope={scope} rangeMs={rangeMs} conn={conn} onEndpoint={openEndpoint} onQuery={openQuery} onTrace={openTrace} onLogs={() => go("Logs")} onStats={openStats} />
             ) : page === "Endpoints" ? (
@@ -326,7 +342,8 @@ function Shell({ machine }: { machine: Machine }) {
           </SendProvider>
         </main>
       </div>
-      <AddSource open={adding.open} kind={adding.kind} onClose={() => setAdding((a) => ({ ...a, open: false }))} onChanged={again} onStats={openStats} onLook={canScan && !scanning ? look : undefined} lookNote={local && scanner.old ? TOO_OLD : undefined} />
+      <AddMachine />
+      <AddSource open={adding.open} kind={adding.kind} onClose={() => setAdding((a) => ({ ...a, open: false }))} onChanged={again} onStats={openStats} onLook={canScan && !scanning ? look : undefined} lookNote={scanner.old ? TOO_OLD : undefined} />
     </div>
   );
 }
@@ -339,7 +356,7 @@ const TOO_OLD = "This daemon is from an older Leadline, which can't look around 
 
 // Shipyard's boxes are not asked for again within this long: asking runs Shipyard's own command.
 const BOXES_FOR_MS = 30_000;
-// Whether this Mac's Shipyard had boxes the last time it was asked: a word, so the machine switcher can be there to open without asking again.
+// Whether this Mac's Shipyard had boxes the last time it was asked: a word, kept so that is known without asking again.
 const BOXES_KEY = "leadline.shipyard.boxes";
 
 function hadBoxes(): boolean {
@@ -355,7 +372,8 @@ function hadBoxes(): boolean {
  * daemon run Shipyard's command line, and any `berth` command starts
  * Shipyard's own background agent if it is installed and not running. A
  * window opening must not do that, so nothing here asks on mount or on a
- * timer: `ask` is the only way, and it is called from a person's act.
+ * timer: `ask` is the only way, and it is called from a person's act (the
+ * foot of a scan they started). The Add a machine dialog asks for itself.
  * None when Shipyard isn't installed, has no boxes, or the daemon can't ask.
  */
 function useBoxes(on: boolean): Boxes {
@@ -439,22 +457,10 @@ function useRates(sources: SourcesData | undefined): Record<string, number | nul
 // NoDaemon is the window with no daemon to show. The desktop app finds or
 // starts this Mac's daemon itself (lib/daemon.ts), so there this is a moment
 // at launch, or a failure with its reason; a browser tab has to be told. A
-// daemon on another machine is not the app's to start.
-function NoDaemon({ daemon, machine }: { daemon: DaemonStatus | null; machine: Machine }) {
-  if (machine.id !== LOCAL_ID) {
-    return (
-      <Setup
-        title={`No answer from ${machine.name}`}
-        after={
-          <Button size="sm" onClick={() => machines.use(LOCAL_ID)}>
-            Back to this Mac
-          </Button>
-        }
-      >
-        Nothing answers at <Code>{machine.url}</Code>. If that is another machine's daemon, check that its port is still forwarded to this one.
-      </Setup>
-    );
-  }
+// daemon on another machine is not the app's to start: what can be done is
+// to open the way to it again (views/Machines.tsx, Unreachable).
+function NoDaemon({ daemon, machine, onMachines }: { daemon: DaemonStatus | null; machine: Machine; onMachines: () => void }) {
+  if (machine.id !== LOCAL_ID) return <Unreachable machine={machine} onMachines={onMachines} />;
   if (!daemon) {
     return (
       <Setup title="Leadline's daemon isn't running">

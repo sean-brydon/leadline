@@ -21,9 +21,12 @@ import (
 //	berth locations BOX --json   one box's projects and their worktrees
 //
 // No other berth command is ever run from this file: the two argument
-// lists below are the only ones it builds. task.go has the other two: a
-// third that only reads (a box's agents), and the one that starts a task,
-// which runs when a person presses Send and at no other time.
+// lists below are the only ones it builds. task.go has two more: a third
+// that only reads (a box's agents), and the one that starts a task, which
+// runs when a person presses Send and at no other time. forward.go has
+// the last three: one that lists Shipyard's forwards, and the two that
+// open and close a forward to a box's Leadline, which run when a person
+// adds, uses or removes a machine and at no other time.
 type shipyard struct {
 	home string
 	// find locates the berth command; swapped out in tests.
@@ -32,7 +35,13 @@ type shipyard struct {
 	boxesTimeout, locationsTimeout, keep time.Duration
 	// And how long starting a task may take.
 	taskTimeout time.Duration
-	now         func() time.Time
+	// How long opening or closing a forward may take, the local ports a
+	// forward is given, and whether one is free; the last two are swapped
+	// out in tests.
+	forwardTimeout time.Duration
+	ports          PortRange
+	free           func(port int) bool
+	now            func() time.Time
 
 	mu        sync.Mutex
 	boxes     *Shipyard
@@ -42,6 +51,8 @@ type shipyard struct {
 
 	// sending is held while a task is being started: one at a time.
 	sending sync.Mutex
+	// forwarding is held while forwards are listed, opened or closed.
+	forwarding sync.Mutex
 }
 
 type cachedLocations struct {
@@ -51,7 +62,8 @@ type cachedLocations struct {
 
 func newShipyard(home string) *shipyard {
 	s := &shipyard{home: home, boxesTimeout: 4 * time.Second, locationsTimeout: 6 * time.Second, keep: 10 * time.Second,
-		taskTimeout: taskTimeout, now: time.Now, locations: map[string]cachedLocations{}, agents: map[string]cachedAgents{}}
+		taskTimeout: taskTimeout, forwardTimeout: 20 * time.Second, ports: forwardPorts(), free: portFree,
+		now: time.Now, locations: map[string]cachedLocations{}, agents: map[string]cachedAgents{}}
 	s.find = func() string { return findBerth(home) }
 	return s
 }
@@ -97,7 +109,9 @@ func findBerth(home string) string {
 	return ""
 }
 
-const boxNote = "Leadline can't run on a box yet."
+// What a box's `leadline` says: the listing of boxes opens nothing, so it
+// does not know.
+const boxNote = "Whether Leadline is on a box is known once a forward to it is open: POST /api/shipyard/forwards."
 
 var (
 	errNoShipyard = &Problem{Code: "shipyard_not_found", Message: "Shipyard is not installed on this machine."}
@@ -191,7 +205,7 @@ func (s *shipyard) listBoxes(ctx context.Context, cli string) ([]Box, error) {
 			continue
 		}
 		box := Box{Name: b.Name, State: b.State, Error: clip(b.Error, 200), LatencyMs: b.LatencyMs, Local: b.Local,
-			Leadline: BoxLeadline{State: "unsupported", Note: boxNote}}
+			Leadline: BoxLeadline{State: "unknown", Note: boxNote}}
 		if !b.Since.IsZero() {
 			box.SinceMs = ms(b.Since)
 		}

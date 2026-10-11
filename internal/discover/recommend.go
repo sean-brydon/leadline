@@ -40,7 +40,7 @@ func because(p *Project, why string) bool {
 
 // advise says how to connect a project, as data: the kind, one sentence,
 // and the exact command or lines. It changes nothing. daemon is the
-// daemon's address as the app reached it.
+// daemon's own address: the advice is followed on the daemon's machine.
 func advise(p *Project, daemon string) Connect {
 	// A daemon that is not where `leadline run` and the providers look
 	// has to be named, or what is advised would send to nobody.

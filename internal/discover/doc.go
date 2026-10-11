@@ -20,8 +20,10 @@
 //     which saves it. What leaves is a masked URL and an opaque id; no
 //     exported type has a field that could carry the URL as written.
 //   - No project is modified. How to connect one is advice, as data.
-//   - Shipyard is asked with two read-only commands and nothing else, and
-//     only when someone asks about Shipyard.
+//   - Shipyard is asked with read-only commands, and only when someone
+//     asks about Shipyard. Two things change anything there, each from one
+//     place and only when a person asks for it: starting a task (task.go)
+//     and opening or closing a forward to a box's Leadline (forward.go).
 //
 // The HTTP API over this package is described in API.md.
 package discover

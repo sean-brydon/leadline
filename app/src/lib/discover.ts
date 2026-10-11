@@ -316,7 +316,9 @@ export function adviceTitle(a: Pick<ConnectAdvice, "kind">): string {
 
 // The advice names the daemon's address itself wherever it is not the
 // usual one (`leadline run --url …`, and LEADLINE_URL for the Next.js
-// plugin), from the address the scan was asked at: nothing here adds it.
+// plugin): the daemon's own, on its machine, where the advice is followed.
+// Nothing here adds it, and nothing turns it into the port this window
+// reaches the daemon through.
 
 /** adviceCommand is the one line that says how a project would be connected, for the scan's list. */
 export function adviceCommand(p: Pick<FoundProject, "connect">): string {

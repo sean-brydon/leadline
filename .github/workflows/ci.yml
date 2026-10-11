@@ -1,10 +1,12 @@
 name: ci
 
 # Pull requests are checked; a push to main was checked as its pull request.
-# Run it on any branch by hand from the Actions tab.
+# Run it on any branch by hand from the Actions tab. The release workflow
+# runs all of it on the commit it is about to release.
 on:
   pull_request:
   workflow_dispatch:
+  workflow_call:
 
 permissions:
   contents: read
@@ -28,7 +30,17 @@ jobs:
           go-version-file: go.mod
       - run: go vet ./...
       - run: go test -race ./...
-      - run: shellcheck scripts/*.sh
+      # Warnings and errors fail the job; notes do not. The runner's
+      # shellcheck is older than a developer's and calls every function a
+      # trap runs unreachable (SC2317), which the newer one knows better than.
+      - run: shellcheck --severity=warning scripts/*.sh scripts/release-test/*.sh scripts/release-test/standins/*
+      # The four places the version is written say the same.
+      - run: scripts/version.sh
+      # The scripts that handle a release's credentials, against stand-ins
+      # for 1Password and GitHub: what they set, that a value only ever
+      # travels on standard input, and that each way of failing says so and
+      # sets nothing.
+      - run: scripts/release-test/credentials_test.sh
       # The installer's own logic, on a made-up release: it checks before it
       # installs, upgrades, uninstalls, and does nothing when cut short.
       # In dash and in bash, since `curl | sh` meets either.

@@ -2,6 +2,7 @@
   "name": "leadline",
   "private": true,
   "version": "0.0.1",
+  "license": "MIT",
   "type": "module",
   "scripts": {
     "dev": "vite",
@@ -9,7 +10,7 @@
     "preview": "vite preview",
     "tauri": "tauri",
     "sidecar": "sh ../scripts/sidecar.sh",
-    "test": "node --experimental-strip-types --test src/lib/format.test.ts src/lib/tree.test.ts src/lib/metricFormat.test.ts src/lib/pages.test.ts src/lib/machines.test.ts src/lib/scope.test.ts src/lib/sources.test.ts src/lib/connurl.test.ts src/lib/spans.test.ts src/lib/kept.test.ts src/lib/logkinds.test.ts src/lib/routes.test.ts src/lib/discover.test.ts src/lib/brief.test.ts src/components/chartkit.test.ts"
+    "test": "node --experimental-strip-types --test src/lib/format.test.ts src/lib/tree.test.ts src/lib/metricFormat.test.ts src/lib/pages.test.ts src/lib/machines.test.ts src/lib/reach.test.ts src/lib/scope.test.ts src/lib/sources.test.ts src/lib/connurl.test.ts src/lib/spans.test.ts src/lib/kept.test.ts src/lib/logkinds.test.ts src/lib/routes.test.ts src/lib/discover.test.ts src/lib/brief.test.ts src/lib/updateText.test.ts src/components/chartkit.test.ts"
   },
   "dependencies": {
     "@base-ui/react": "^1.8.0",
