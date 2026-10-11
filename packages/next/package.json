@@ -1,6 +1,7 @@
 {
   "name": "@leadline/next",
   "version": "0.0.1",
+  "license": "MIT",
   "description": "See a Next.js app in Leadline while you develop it: routes, server actions, renders, queries, users and the browser.",
   "repository": {
     "type": "git",

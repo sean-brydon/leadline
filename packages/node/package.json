@@ -1,6 +1,7 @@
 {
   "name": "@leadline/node",
   "version": "0.0.1",
+  "license": "MIT",
   "description": "See a Node.js app's traces, database queries and logs in Leadline while you develop it.",
   "repository": {
     "type": "git",
