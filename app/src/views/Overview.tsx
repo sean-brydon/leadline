@@ -1,7 +1,8 @@
 import { useEffect, useRef, useState, type ReactNode, type RefObject } from "react";
 import { api, type Connection, type EndpointKey, type GroupedSeries, type QueryKey, type QueryRow, type Scope } from "@/lib/api";
 import { fmtClock, fmtCount, fmtMs, fmtMsShort, fmtPct, fmtPer, fmtRate, fmtSpan } from "@/lib/format";
-import { useLive } from "@/lib/live";
+import { useLive, useMachine } from "@/lib/live";
+import { hereOf } from "@/lib/machines";
 import { chartNote, groupsInDb } from "@/lib/scope";
 import { captureWord, kindVersion, versionOf } from "@/lib/sources";
 import { Chart, type Line } from "@/components/Chart";
@@ -375,6 +376,8 @@ function MoreCharts({ scope, deps }: { scope: () => Scope; deps: unknown[] }) {
  * series can do, so it says so when another server of that system is in it.
  */
 function DbOverview({ scope, rangeMs, conn, onQuery, onStats }: Props) {
+  // The machine the database is on, when it is on the daemon's own: "this Mac", or the one being looked at.
+  const here = hereOf(useMachine());
   const { db, dbServer } = scope();
   const deps = [rangeMs, db, dbServer];
   const calls = useLive(() => api.breakdown(scope(), "db_calls", BUCKETS, 20), deps);
@@ -432,7 +435,7 @@ function DbOverview({ scope, rangeMs, conn, onQuery, onStats }: Props) {
               <>
                 <div className="flex items-center gap-2">
                   <span className="min-w-0 flex-1 truncate">
-                    {kindVersion(conn.kind, versionOf(conn.health))} <span className="text-muted-foreground">{conn.remote ? `at ${conn.host}` : "on this Mac"}</span>
+                    {kindVersion(conn.kind, versionOf(conn.health))} <span className="text-muted-foreground">{conn.remote ? `at ${conn.host}` : `on ${here}`}</span>
                   </span>
                   {onStats && (
                     <Button variant="outline" size="xs" onClick={() => onStats(conn.id)} className="shrink-0 font-normal">

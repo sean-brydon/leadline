@@ -3,7 +3,8 @@ import { CheckIcon, RefreshCwIcon } from "lucide-react";
 import { api, ApiError, type Connection, type PgStatStatements, type PostgresStats, type RedisStats } from "@/lib/api";
 import { masked } from "@/lib/connurl";
 import { fmtAgo, fmtBytes, fmtClock, fmtCount, fmtFor, fmtInt, fmtMs, fmtPct } from "@/lib/format";
-import { useEvery } from "@/lib/live";
+import { useEvery, useMachine } from "@/lib/live";
+import { hereOf } from "@/lib/machines";
 import { captureWord, connProblem, kindVersion, versionOf } from "@/lib/sources";
 import { useCapture, CaptureSwitch } from "@/components/Capture";
 import { CopyLine, Figure, Figures, Listing, Meter, Rows, Side, Surface, Tip, Waiting } from "@/components/ui";
@@ -22,6 +23,7 @@ const EVERY_MS = 5000;
  * connection's one setting (capture) at the top.
  */
 export function ConnectionStats({ conn, onClose, onChanged }: { conn: Connection; onClose: () => void; onChanged: () => void }) {
+  const here = hereOf(useMachine());
   const { data, error, loading, again } = useEvery(() => api.connectionStats(conn.id), EVERY_MS, [conn.id]);
   const fresh = () => {
     api.connectionStats(conn.id, true).then(again, again);
@@ -36,7 +38,7 @@ export function ConnectionStats({ conn, onClose, onChanged }: { conn: Connection
         <>
           <span className="selectable truncate font-medium">{conn.name}</span>
           <span className="truncate text-[11px] text-muted-foreground">
-            {kindVersion(conn.kind, versionOf(conn.health))} {conn.remote ? `at ${conn.host}` : `on this Mac, ${conn.host}`}
+            {kindVersion(conn.kind, versionOf(conn.health))} {conn.remote ? `at ${conn.host}` : `on ${here}, ${conn.host}`}
           </span>
           {conn.remote && (
             <Badge variant="secondary" className="font-normal text-muted-foreground">

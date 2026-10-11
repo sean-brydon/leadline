@@ -27,9 +27,16 @@ use std::thread::sleep;
 use std::time::{Duration, Instant};
 use tauri::{AppHandle, Emitter, Manager, State};
 
-/// Where the daemon listens. The page has the same address built in (BASE
-/// in src/lib/api.ts, and connect-src in tauri.conf.json).
-const ADDR: &str = "127.0.0.1:4320";
+/// Where the daemon listens. The page has the same address built in
+/// (LOCAL_URL in src/lib/machines.ts, and connect-src in tauri.conf.json).
+/// A build for a test can name another for both (LEADLINE_APP_ADDR here,
+/// VITE_LEADLINE_URL there), so that an app being tried never meets the
+/// Leadline a person is running; a release never does
+/// (scripts/mac-release.sh).
+const ADDR: &str = match option_env!("LEADLINE_APP_ADDR") {
+    Some(addr) => addr,
+    None => "127.0.0.1:4320",
+};
 const SIDECAR: &str = "leadlined";
 const EVENT: &str = "daemon";
 /// The app's executable run with this argument and a pid is the watchdog.

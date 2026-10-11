@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"mime"
 	"net/http"
 	"strconv"
 	"time"
@@ -57,7 +58,9 @@ func (s *Server) discoverRoutes(mux *http.ServeMux) *discover.Service {
 		if r.ContentLength != 0 && !readBody(w, r, &in) {
 			return
 		}
-		scan, err := d.Start(discover.ScanOptions{Folders: in.Folders, Daemon: requestURL(r)})
+		// The advice names the daemon by its own address, not by a port a
+		// forward delivered the request through (selfURL).
+		scan, err := d.Start(discover.ScanOptions{Folders: in.Folders, Daemon: selfURL(r)})
 		if err != nil {
 			writeDiscoverProblem(w, err)
 			return
@@ -142,7 +145,126 @@ func (s *Server) discoverRoutes(mux *http.ServeMux) *discover.Service {
 		}
 		writeJSON(w, out)
 	})
+	s.forwardRoutes(mux, d)
 	return d
+}
+
+// forwardRoutes are how this computer reaches the Leadline on one of the
+// owner's Shipyard boxes: a local port Shipyard forwards to the box's
+// daemon. internal/discover/API.md describes them under "Forwards".
+//
+//	GET  /api/shipyard/forwards        the forwards Shipyard holds to a box's Leadline
+//	POST /api/shipyard/forwards        make sure there is one to a box: {"box", "local"}
+//	POST /api/shipyard/forwards/close  close one: {"id"}
+//
+// The two POSTs run `berth forward` and `berth unforward`, which change
+// Shipyard's state, and nothing else in the daemon runs either: no timer,
+// no start-up step. All three are for Leadline's own window (ownWindow).
+func (s *Server) forwardRoutes(mux *http.ServeMux, d *discover.Service) {
+	mux.HandleFunc("GET /api/shipyard/forwards", func(w http.ResponseWriter, r *http.Request) {
+		if !ownWindow(w, r, false) {
+			return
+		}
+		out, err := d.Forwards(r.Context())
+		if err != nil {
+			writeForwardProblem(w, err)
+			return
+		}
+		writeJSON(w, out)
+	})
+	mux.HandleFunc("POST /api/shipyard/forwards", func(w http.ResponseWriter, r *http.Request) {
+		var in struct {
+			Box string `json:"box"`
+			// Local is the port the forward had before, to have again if it is free.
+			Local int `json:"local"`
+		}
+		if !ownWindow(w, r, true) || !readForwardBody(w, r, &in) {
+			return
+		}
+		out, err := d.OpenForward(r.Context(), in.Box, in.Local)
+		if err != nil {
+			writeForwardProblem(w, err)
+			return
+		}
+		writeJSON(w, out)
+	})
+	mux.HandleFunc("POST /api/shipyard/forwards/close", func(w http.ResponseWriter, r *http.Request) {
+		var in struct {
+			ID string `json:"id"`
+		}
+		if !ownWindow(w, r, true) || !readForwardBody(w, r, &in) {
+			return
+		}
+		out, err := d.CloseForward(r.Context(), in.ID)
+		if err != nil {
+			writeForwardProblem(w, err)
+			return
+		}
+		writeJSON(w, out)
+	})
+}
+
+// ownWindow lets a request through when it may act for the person. A
+// request with no Origin comes from a program on this machine, which could
+// run Shipyard itself. One from a page must be from Leadline's own window
+// (appOrigin says why): the app being debugged is a page on this machine
+// too, and must not be able to open or close a forward. With `body`, what
+// was sent must also say it is JSON, which a form a web page submits
+// can't. It writes the refusal itself.
+func ownWindow(w http.ResponseWriter, r *http.Request, body bool) bool {
+	if origin := r.Header.Get("Origin"); origin != "" && !appOrigin(origin) {
+		writeForwardProblem(w, &discover.Problem{Code: "forbidden", Message: "Only Leadline's own window can open, list or close a Shipyard forward."})
+		return false
+	}
+	if !body {
+		return true
+	}
+	if kind, _, _ := mime.ParseMediaType(r.Header.Get("Content-Type")); kind != "application/json" {
+		writeForwardProblem(w, &discover.Problem{Code: "not_json", Message: "A forward is asked for as JSON, with Content-Type: application/json."})
+		return false
+	}
+	return true
+}
+
+// readForwardBody reads a small JSON body, and answers in the API's own
+// shape when it can't.
+func readForwardBody(w http.ResponseWriter, r *http.Request, into any) bool {
+	if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, 4<<10)).Decode(into); err != nil {
+		writeForwardProblem(w, &discover.Problem{Code: "bad_request", Message: "The request body is not JSON Leadline can read."})
+		return false
+	}
+	return true
+}
+
+// writeForwardProblem answers with why a forward was not opened, listed
+// or closed, in the shape the other routes' errors have.
+func writeForwardProblem(w http.ResponseWriter, err error) {
+	p, ok := err.(*discover.Problem)
+	if !ok {
+		p = &discover.Problem{Code: "failed", Message: "Leadline could not do that."}
+	}
+	status := http.StatusBadGateway
+	switch p.Code {
+	case "bad_request", "box_local":
+		status = http.StatusBadRequest
+	case "forbidden":
+		status = http.StatusForbidden
+	case "not_json":
+		status = http.StatusUnsupportedMediaType
+	case "shipyard_not_found", "no_box":
+		status = http.StatusNotFound
+	case "port_in_use", "no_port", "not_leadline":
+		status = http.StatusConflict
+	case "box_offline":
+		status = http.StatusServiceUnavailable
+	case "shipyard_timeout":
+		status = http.StatusGatewayTimeout
+	case "failed":
+		status = http.StatusInternalServerError
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(status)
+	json.NewEncoder(w).Encode(map[string]any{"error": p})
 }
 
 // writeDiscoverProblem answers with a discovery error, in the shape the

@@ -2,7 +2,8 @@
 
 What onboarding calls to look around instead of asking for a URL: what is
 listening on this machine, the projects behind it, the database and Redis
-URLs in their env files, and the owner's Shipyard boxes. The code is this
+URLs in their env files, and the owner's Shipyard boxes; and how the app
+reaches the Leadline on one of those boxes. The code is this
 package (`internal/discover`); the routes are in `internal/api/discover.go`.
 Change them together with this file: the app's screens are written from it.
 
@@ -17,6 +18,9 @@ Change them together with this file: the app's screens are written from it.
 | `POST /api/discover/test` | try found connections by id, saving nothing |
 | `GET /api/discover/shipyard` | is Shipyard here, and its boxes |
 | `GET /api/discover/shipyard/boxes/{box}` | one box's projects and worktrees |
+| `GET /api/shipyard/forwards` | the forwards Shipyard holds to a box's Leadline |
+| `POST /api/shipyard/forwards` | make sure there is a forward to a box's Leadline. **Changes Shipyard's state** |
+| `POST /api/shipyard/forwards/close` | close one. **Changes Shipyard's state** |
 
 Onboarding in order:
 
@@ -70,6 +74,11 @@ Codes this API adds:
 | `shipyard_not_found` | 404 | a box's projects were asked for and Shipyard is not here |
 | `no_box` | 404 | Shipyard has no box of that name |
 | `shipyard_failed` | 502 | the `berth` command failed, timed out, or printed something else than JSON |
+
+And the [forwards](#forwards) add: `forbidden` (403, the request is from a
+page that is not Leadline's own window), `not_json` (415), `box_local` (400),
+`box_offline` (503), `port_in_use` and `no_port` (409), `forward_failed`
+(502), `not_leadline` (409) and `shipyard_timeout` (504).
 
 Inside a `save` or `test` answer, each id has its own error: `not_found`
 (no found connection has that id in the latest scan), `expired` (the daemon
@@ -730,8 +739,14 @@ Advice as data. Leadline changes nothing in a project.
 `<your dev command>`.
 
 **The daemon's address** is in the advice whenever the daemon is not at the
-usual `http://127.0.0.1:4320`, taken from the address the scan request
-came to, so the app need not patch it: `command` is then
+usual `http://127.0.0.1:4320`. It is the daemon's own: the address it
+listens on, taken from the connection the scan request arrived on, and not
+from the request's `Host`. The two differ when the daemon is on another
+machine and the app looks at it through a forwarded port: the request then
+names the forward's end on the viewer's computer (`127.0.0.1:14321`), which
+does not exist on the machine where the advice is followed. A request that
+names the port the daemon listens on keeps the name it used (`localhost`
+stays `localhost`). The app need not patch it: `command` is then
 `leadline run --url http://127.0.0.1:4342 -- pnpm dev`, and a `next-plugin`
 has `env_file` and `env_lines` (`LEADLINE_URL=…` for `.env.local`), which
 is where the plugin looks. At the usual address there is no `--url` and no
@@ -1340,10 +1355,10 @@ goes, and it runs no `berth` at all.
       "latency_ms": 86,
       "since_ms": 1791642067000,
       "leadline": {
-        "state": "unsupported",
+        "state": "unknown",
         "installed": false,
         "reachable": false,
-        "note": "Leadline can't run on a box yet."
+        "note": "Whether Leadline is on a box is known once a forward to it is open: POST /api/shipyard/forwards."
       }
     },
     {
@@ -1352,10 +1367,10 @@ goes, and it runs no `berth` at all.
       "error": "dial tcp 100.64.0.12:1376: i/o timeout",
       "since_ms": 1791567000000,
       "leadline": {
-        "state": "unsupported",
+        "state": "unknown",
         "installed": false,
         "reachable": false,
-        "note": "Leadline can't run on a box yet."
+        "note": "Whether Leadline is on a box is known once a forward to it is open: POST /api/shipyard/forwards."
       }
     }
   ],
@@ -1368,11 +1383,13 @@ goes, and it runs no `berth` at all.
 box that is this computer. Only those fields are taken: a box's address and
 fingerprint are not passed on.
 
-**`leadline` is a listing only today.** Leadline cannot run on a box or be
-reached there yet, so every box says `unsupported`. The fields are there so
-that can change without the shape changing: `state` will become `missing`,
-`installed` or `reachable`, and `url` will be where its API is reached from
-this machine.
+**`leadline` says `unknown` for every box.** Listing the boxes opens
+nothing, and a box's Leadline is only reached through a forward, so the
+listing does not know whether one is there: [Forwards](#forwards) is how to
+find out. (A daemon from before the forwards says `unsupported` here.) The
+other fields are there so the listing can say more one day without the
+shape changing: `state` may become `missing`, `installed` or `reachable`,
+and `url` where its API is reached from this machine.
 
 Always `200`. When Shipyard is not there, or did not answer, `available` is
 false and the app shows "Shipyard not found". Not installed:
@@ -1504,7 +1521,234 @@ changes anything. They are run when one of the routes is asked for and at no
 other time. One thing to know: `berth boxes` starts Shipyard's own laptop
 agent if it is installed and not running, as any `berth` command does.
 
-Leadline runs two more `berth` commands, from the routes that send a problem
-to Shipyard: `berth agents BOX --json`, which reads, and `berth task new`,
-which starts a task and is the only command Leadline runs that changes
-anything in Shipyard. `internal/brief/API.md` describes both, and when.
+Leadline runs five more `berth` commands. Two from the routes that send a
+problem to Shipyard: `berth agents BOX --json`, which reads, and
+`berth task new`, which starts a task; `internal/brief/API.md` describes
+both, and when. And three from the routes below, which reach a box's
+Leadline: `berth forwards --json`, which reads, and `berth forward` and
+`berth unforward`, which open and close a forward. `task new`, `forward`
+and `unforward` are everything Leadline runs that changes anything in
+Shipyard.
+
+## Forwards
+
+A Leadline on another machine listens on that machine's localhost and
+nowhere else (`scripts/install.sh` sets it up so). For one of the owner's
+Shipyard boxes, this computer reaches it through a port Shipyard forwards
+over its own encrypted connection to the box: `127.0.0.1:14321` here is
+port 4320 on the box. These three routes are how the app opens that way,
+finds it again, and closes it. They are on **this computer's** daemon, the
+one beside Shipyard's command line, whichever machine the window is showing.
+
+```
+GET  /api/shipyard/forwards
+POST /api/shipyard/forwards         {"box": "hetzner-1", "local": 14321}
+POST /api/shipyard/forwards/close   {"id": "f0000000"}
+```
+
+**Who may ask.** The two POSTs run `berth forward` and `berth unforward`,
+which change Shipyard's state, so all three are for Leadline's own window:
+a request with an `Origin` must come from the desktop app's webview or the
+app's dev server (`LEADLINE_APP_ORIGINS` adds others), exactly as for
+`POST /api/shipyard/tasks`. The app being debugged is a page on this
+machine too, and gets `403`. A request with no `Origin` is a program on
+this machine, which could run `berth` itself, and is let through. A POST
+must also be JSON that says so (`Content-Type: application/json`): a form
+a page submits is refused with `415`. Bodies are at most 4 KB.
+
+**When they run.** When one of these routes is asked for, and at no other
+time: nothing opens, checks or closes a forward when the daemon starts, on
+a timer, or because data arrived. Each `berth` command is run without a
+shell, with the box's name and the forward's id checked against a pattern
+that cannot be read as a flag, and with a time limit: 6 seconds to list,
+20 to open or close.
+
+The examples are from a daemon whose Shipyard is the fake one in
+`internal/discover/fakeberth`, started with
+`LEADLINE_FORWARD_PORTS=14321-14339`.
+
+### Opening one
+
+```
+POST /api/shipyard/forwards
+{"box": "hetzner-1"}
+```
+
+Makes sure there is a forward to the box's Leadline and answers with it.
+In order: the box must be one `berth boxes --json` lists (the listing is
+the one [above](#shipyard), kept 10 seconds), not this computer itself, and
+online; `berth forwards --json` is read; if Shipyard already holds a forward
+to that box's port 4320, that one is the answer, whoever opened it and
+whatever local port it is on, so a box never gets two; otherwise
+`berth forward BOX LOCAL:4320 --json` opens one.
+
+```json
+{
+  "id": "f0000000",
+  "box": "hetzner-1",
+  "local": 14321,
+  "remote": 4320,
+  "url": "http://127.0.0.1:14321",
+  "state": "listening",
+  "opened": true
+}
+```
+
+| field | |
+| --- | --- |
+| `id` | Shipyard's own id for the forward. It is what closes it |
+| `local`, `remote` | the port on this computer, and the box's (always 4320) |
+| `url` | where the box's Leadline is reached from this computer |
+| `state` | Shipyard's own: `listening` |
+| `opened` | `true` when this request ran `berth forward`. `false` when the forward was there already and is reused |
+
+Asked again for the same box, with or without the port it has:
+
+```json
+{
+  "id": "f0000000",
+  "box": "hetzner-1",
+  "local": 14321,
+  "remote": 4320,
+  "url": "http://127.0.0.1:14321",
+  "state": "listening",
+  "opened": false
+}
+```
+
+**The local port** is picked from a small range, 14320 to 14339, first to
+last: the first that no forward Shipyard holds is on, and that nothing on
+this computer listens on. `local` in the request is the port the machine
+had before; when it is in the range and free it is the one picked, so a
+forward that went away (Shipyard was restarted, the laptop slept) comes
+back at the same address. A port Shipyard then refuses as in use is passed
+over for the next, three times at most. `LEADLINE_FORWARD_PORTS=FIRST-LAST`
+in the daemon's environment moves the range (ports from 1024, at most 256
+of them); anything else leaves the usual one.
+
+**Whether a Leadline answers** through the forward is not checked here.
+The app asks `GET /api/health` at `url` itself: a Leadline says
+`"name": "leadline"` and a `version`. When nothing answers and `opened` was
+true, the app closes the forward again, so a box without Leadline is not
+left with an open forward to nothing.
+
+**Who opened it** is not recorded by Shipyard, nor by the daemon: `opened`
+in the answer is the only word of it, and the app keeps it with the
+machine. It closes, on removing a machine, only a forward it was told it
+opened; one that was already there is somebody's own and is left open.
+
+Refusals, all before anything was changed unless said:
+
+```json
+{
+  "error": {
+    "code": "box_offline",
+    "message": "The box build-box is offline.",
+    "hint": "Shipyard said: dial tcp: i/o timeout"
+  }
+}
+```
+
+| code | status | message |
+| --- | --- | --- |
+| `shipyard_not_found` | 404 | `Shipyard is not installed on this machine.` |
+| `no_box` | 404 | `Shipyard has no box named nowhere.` |
+| `box_local` | 400 | `this-mac is this computer, whose Leadline needs no forward.` |
+| `box_offline` | 503 | `The box build-box is offline.`, or that Shipyard is still connecting to it, or that it no longer trusts this computer |
+| `no_port` | 409 | `No port from 14321 to 14339 is free on this computer.` |
+| `port_in_use` | 409 | `Port 14323 is in use.` Shipyard refused three ports in a row; `berth forward` was run for each and opened none |
+| `forward_failed` | 502 | `Shipyard has a forward to hetzner-1 on port 14321, and could not open that port.` The forward exists in Shipyard in its `failed` state; the hint names `berth unforward ID` and passes on what Shipyard said |
+| `shipyard_timeout` | 504 | `Shipyard did not answer in time.` The forward may have opened: asking again finds it |
+| `shipyard_failed` | 502 | `Shipyard could not open the forward.`, with what `berth` said as the hint |
+| `bad_request` | 400 | `A forward needs the name of a box.`, or the body is not JSON |
+| `not_json` | 415 | `A forward is asked for as JSON, with Content-Type: application/json.` |
+| `forbidden` | 403 | `Only Leadline's own window can open, list or close a Shipyard forward.` |
+
+### Listing them
+
+```
+GET /api/shipyard/forwards
+```
+
+Runs `berth forwards --json` and answers with the forwards to a box's port
+4320: the ones this API opened, and any a person opened by hand to the same
+port, which Shipyard does not tell apart. Forwards to other ports are
+Shipyard's own business and are left out. `ports` is the range a new one's
+local port is picked from.
+
+```json
+{
+  "forwards": [
+    {
+      "id": "f0000000",
+      "box": "hetzner-1",
+      "local": 14321,
+      "remote": 4320,
+      "url": "http://127.0.0.1:14321",
+      "state": "listening"
+    }
+  ],
+  "ports": {
+    "first": 14321,
+    "last": 14339
+  },
+  "checked_ms": 1791748481468.989
+}
+```
+
+`state` is `listening`, or `failed` with an `error` when Shipyard could not
+open the local port (it tries again by itself).
+
+### Closing one
+
+```
+POST /api/shipyard/forwards/close
+{"id": "f0000000"}
+```
+
+Reads `berth forwards --json`, and when the forward is there and goes to a
+box's port 4320, runs `berth unforward ID`. It uninstalls nothing and
+touches nothing on the box: the box's Leadline keeps running and keeps its
+data.
+
+```json
+{
+  "ok": true,
+  "closed": true,
+  "forward": {
+    "id": "f0000000",
+    "box": "hetzner-1",
+    "local": 14321,
+    "remote": 4320,
+    "url": "http://127.0.0.1:14321",
+    "state": "listening"
+  }
+}
+```
+
+A forward Shipyard no longer has is not an error, since what was wanted is
+already so; `berth unforward` is not run:
+
+```json
+{
+  "ok": true,
+  "closed": false
+}
+```
+
+A forward to anything but a Leadline is refused, and left alone:
+
+```json
+{
+  "error": {
+    "code": "not_leadline",
+    "message": "That forward goes to port 3000 on hetzner-1, not to a Leadline, so Leadline leaves it alone.",
+    "hint": "`berth unforward 9f3a1c2e` closes it."
+  }
+}
+```
+
+Also `bad_request` (`That is not a forward's id.`), `shipyard_not_found`,
+`shipyard_timeout` (the forward may be closed all the same), and
+`shipyard_failed` (`Shipyard could not close the forward.`, with what
+`berth` said as the hint).

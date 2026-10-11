@@ -58,3 +58,13 @@ test("an older daemon, or none yet, promises no more than it knows", () => {
   // Storage before the first summary.
   assert.match(kept("this Mac", undefined, storage(), NOW).long, /holds 8\.2 MB on disk\./);
 });
+
+test("another machine's data is said to be kept there, and read from here", () => {
+  const k = kept("hetzner-1", summary, storage(), NOW, true);
+  assert.equal(k.short, "Everything is kept on hetzner-1; this window only reads it. 8.2 MB kept, for up to 3 days.");
+  assert.match(k.long, /^It is all kept on hetzner-1, and leaves only for this window, through the port forwarded to this Mac\. Leadline holds 8\.2 MB on disk: /);
+  assert.ok(!k.long.includes("Nothing leaves"));
+  // An older daemon there, and one that hasn't answered yet.
+  assert.equal(kept("hetzner-1", summary, null, NOW, true).short, "Everything is kept on hetzner-1; this window only reads it. Holding 20k spans and 2.6k logs.");
+  assert.equal(kept("hetzner-1", undefined, undefined, NOW, true).short, "Everything is kept on hetzner-1; this window only reads it.");
+});

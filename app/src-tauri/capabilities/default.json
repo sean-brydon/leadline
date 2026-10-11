@@ -1,7 +1,16 @@
 {
   "$schema": "../gen/schemas/desktop-schema.json",
   "identifier": "default",
-  "description": "What the app's own window may do: move itself, and ask how the daemon is and for it to be started again. Starting and stopping the daemon is the app's work (src/daemon.rs), not the page's.",
-  "permissions": ["core:default", "core:window:allow-start-dragging", "allow-daemon-status", "allow-daemon-start"],
-  "windows": ["main"]
+  "description": "What the app's own window may do: move itself, ask how the daemon is and for it to be started again, and ask whether a newer Leadline is ready and to restart into it. Starting and stopping the daemon is the app's work (src/daemon.rs), and so is finding, checking and installing an update (src/update.rs): the page has no permission to the updater itself.",
+  "permissions": [
+    "core:default",
+    "core:window:allow-start-dragging",
+    "allow-daemon-status",
+    "allow-daemon-start",
+    "allow-update-status",
+    "allow-update-install"
+  ],
+  "windows": [
+    "main"
+  ]
 }

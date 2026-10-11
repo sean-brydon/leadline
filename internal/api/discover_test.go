@@ -351,7 +351,7 @@ esac
 	var ship discover.Shipyard
 	c.ok("GET", "/api/discover/shipyard", "", &ship)
 	if !ship.Installed || !ship.Available || len(ship.Boxes) != 2 || ship.Boxes[0].Name != "hetzner-1" || ship.Boxes[0].LatencyMs != 86 ||
-		ship.Boxes[1].State != "offline" || ship.Boxes[0].Leadline.State != "unsupported" {
+		ship.Boxes[1].State != "offline" || ship.Boxes[0].Leadline.State != "unknown" {
 		t.Errorf("shipyard = %+v", ship)
 	}
 	var box discover.BoxProjects
@@ -562,5 +562,44 @@ func TestDiscoverIsBehindGuard(t *testing.T) {
 	var scan struct{}
 	if status := c.do("GET", "/api/discover/scan", "", &scan); status != http.StatusNotFound {
 		t.Errorf("a refused request started a scan: %d", status)
+	}
+}
+
+// A scan asked for through a forwarded port advises with the daemon's own
+// address: `leadline run --url` and the plugin's LEADLINE_URL are for the
+// daemon's machine, where the forwarded port does not exist.
+func TestAScanThroughAForwardNamesTheDaemonsOwnAddress(t *testing.T) {
+	base, err := filepath.EvalSymlinks(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	home := filepath.Join(base, "home", "acme")
+	writeTree(t, home, map[string]string{
+		"code/acme/package.json":       `{"name":"acme","scripts":{"dev":"next dev"},"dependencies":{"next":"^16.0.1"}}`,
+		"code/acme-admin/package.json": `{"name":"acme-admin","scripts":{"dev":"vite"},"devDependencies":{"vite":"^7.1.4"}}`,
+	})
+	c := discoverClient(t, home, "")
+	const through = "127.0.0.1:14320"
+	body, _ := json.Marshal(map[string]any{"folders": []string{filepath.Join(home, "code")}})
+	forwarded(t, c.base, "POST", "/api/discover/scan", through, string(body))
+	var scan discover.Scan
+	raw := forwarded(t, c.base, "GET", "/api/discover/scan?wait_ms=20000", through, "")
+	if err := json.Unmarshal([]byte(raw), &scan); err != nil || scan.State != "done" || len(scan.Projects) != 2 {
+		t.Fatalf("scan: %v %s", err, raw)
+	}
+	if strings.Contains(raw, "14320") {
+		t.Errorf("the scan names the forwarded port: %s", raw)
+	}
+	for _, p := range scan.Projects {
+		switch p.Name {
+		case "acme":
+			if p.Connect.Kind != "next-plugin" || len(p.Connect.EnvLines) != 1 || p.Connect.EnvLines[0] != "LEADLINE_URL="+c.base {
+				t.Errorf("acme: %+v", p.Connect)
+			}
+		case "acme-admin":
+			if p.Connect.Command != "leadline run --url "+c.base+" -- npm run dev" {
+				t.Errorf("acme-admin: %+v", p.Connect)
+			}
+		}
 	}
 }

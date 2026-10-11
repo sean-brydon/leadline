@@ -3,6 +3,7 @@
 
 import { briefParams, briefPath, type BriefAsk, type Mark } from "./brief.ts";
 import { LOCAL_ID, machines } from "./machines";
+import { homed, ownAddress, probeOf, type Probe } from "./reach.ts";
 import { dbParams, type Scope } from "./scope.ts";
 
 export type { Scope } from "./scope";
@@ -19,6 +20,21 @@ export const localBase = (): string => (machines.get().machines.find((m) => m.id
 
 /** Whether the window is showing this computer's own daemon. */
 export const showingLocal = (): boolean => machines.current().url === localBase();
+
+// What each daemon says it listens at on its own machine, by the address
+// this window reaches it at. A daemon looked at through a forwarded port
+// is reached at 127.0.0.1:14321 here and listens at its own 4320 there;
+// every answer to `sources` says which (lib/reach.ts, ownAddress).
+const listensAt = new Map<string, string>();
+
+/**
+ * ownBase is the address of the daemon the window is showing as a program
+ * on that daemon's machine reaches it. It is what a command to be run
+ * there has to name (`leadline run --url`, an MCP address, an env line),
+ * and never the forwarded port, which exists only on this computer. For
+ * this computer's own daemon it is `base()`.
+ */
+export const ownBase = (): string => listensAt.get(base()) ?? base();
 
 export type Summary = { spans: number; logs: number; traces: number; services: string[] };
 
@@ -728,7 +744,11 @@ export type SaveFound = {
 
 export type TestFound = { results: { id: string; result?: TestResult; error?: Fault }[] };
 
-/** One of the owner's Shipyard boxes. Leadline cannot run on one yet: `leadline.state` is "unsupported". */
+/**
+ * One of the owner's Shipyard boxes. Listing them opens nothing, so
+ * `leadline.state` is "unknown" ("unsupported" from an older daemon):
+ * whether a box has a Leadline is found by opening a forward to it.
+ */
 export type Box = {
   name: string;
   /** Shipyard's own: "online", "offline", "connecting" or "untrusted". */
@@ -742,6 +762,28 @@ export type Box = {
 };
 
 export type Shipyard = { installed: boolean; available: boolean; cli?: string; boxes: Box[]; checked_ms: number; problem?: Fault };
+
+// Reaching the Leadline on a Shipyard box (internal/discover/API.md, "Forwards").
+
+/** A port on this computer that Shipyard carries to a box's Leadline. */
+export type Forward = {
+  /** Shipyard's own id for it, which closes it. */
+  id: string;
+  box: string;
+  local: number;
+  remote: number;
+  /** Where the box's Leadline is reached from this computer: http://127.0.0.1:14321. */
+  url: string;
+  /** Shipyard's own: "listening", or "failed" with `error`. */
+  state: string;
+  error?: string;
+};
+
+/** The forward to a box, and whether the request that asked for it is the one that opened it (false: it was there already). */
+export type OpenedForward = Forward & { opened: boolean };
+
+/** What became of a forward that was asked to be closed. `closed` is false when Shipyard no longer had it. */
+export type ClosedForward = { ok: boolean; closed: boolean; forward?: Forward };
 
 // Sending a problem to a coding agent (internal/brief/API.md).
 
@@ -864,8 +906,8 @@ async function answer<T>(res: Response): Promise<T> {
   throw new ApiError(text || res.statusText, res.status);
 }
 
-async function get<T>(path: string, params: Params = {}): Promise<T> {
-  const url = new URL(path, base());
+async function get<T>(path: string, params: Params = {}, at: string = base()): Promise<T> {
+  const url = new URL(path, at);
   for (const [k, v] of Object.entries(params)) {
     if (v !== undefined && v !== "") url.searchParams.set(k, String(v));
   }
@@ -905,6 +947,40 @@ async function maybe<T>(path: string): Promise<T | null> {
     }
     throw e;
   }
+}
+
+/** maybeAt is `maybe` for a daemon the window is not showing: null from one that has no such route. */
+async function maybeAt<T>(at: string, path: string): Promise<T | null> {
+  try {
+    return await get<T>(path, {}, at);
+  } catch (e) {
+    if (e instanceof ApiError && (e.status === 404 || e.status === 405)) return null;
+    throw e;
+  }
+}
+
+// An older daemon builds the addresses it writes for people from the
+// request's Host, which through a forward is the forwarded port. What it
+// wrote is put back to its own address here (lib/reach.ts, homed); from a
+// current daemon there is nothing to change.
+const home = (text: string, at: string): string => homed(text, at, listensAt.get(at) ?? at);
+
+function homedScan(scan: Scan, at: string): Scan {
+  if ((listensAt.get(at) ?? at) === at) return scan;
+  const each = (lines: string[] | undefined) => lines?.map((l) => home(l, at));
+  return {
+    ...scan,
+    projects: scan.projects.map((p) => ({
+      ...p,
+      connect: {
+        ...p.connect,
+        command: p.connect.command === undefined ? undefined : home(p.connect.command, at),
+        lines: each(p.connect.lines),
+        env_lines: each(p.connect.env_lines),
+        traces: p.connect.traces && { ...p.connect.traces, command: p.connect.traces.command === undefined ? undefined : home(p.connect.traces.command, at) },
+      },
+    })),
+  };
 }
 
 /** A daemon that has just (re)started may be a newer one: ask it everything again. */
@@ -952,7 +1028,13 @@ export const api = {
     get<MetricSeries>("/api/metrics/series", { since_ms: s.sinceMs, until_ms: untilMs, service: s.service, buckets, name, by }),
 
   // Sources and connections. `sinceMs` is where the captures' windowed counts start; without it, 15 minutes ago.
-  sources: (sinceMs?: number) => get<Sources>("/api/sources", { since_ms: sinceMs }),
+  sources: async (sinceMs?: number) => {
+    const at = base();
+    const s = await get<Sources>("/api/sources", { since_ms: sinceMs }, at);
+    // The first endpoint is the daemon's main listener: its address on its own machine.
+    listensAt.set(at, ownAddress(s.otlp?.endpoints, at));
+    return s;
+  },
   addConnection: (c: { url: string; name?: string; capture?: boolean }) => post<Connection>("/api/connections", c),
   editConnection: (id: string, c: { name?: string; url?: string; capture?: boolean }) => post<Connection>(`/api/connections/${id}`, c),
   deleteConnection: (id: string) => post<{ ok: boolean }>(`/api/connections/${id}/delete`),
@@ -962,7 +1044,14 @@ export const api = {
   connectionStats: (id: string, fresh = false) => get<ConnectionStats>(`/api/connections/${id}/stats`, { fresh: fresh ? 1 : undefined }),
   // Newer routes: null from a daemon that doesn't have them.
   runs: () => maybe<{ runs: Run[] }>("/api/runs").then((r) => r?.runs ?? null),
-  setupPrompt: () => maybe<SetupPrompt>("/api/setup/prompt"),
+  /** The prompt names the daemon's own address, as an agent on its machine reaches it. */
+  setupPrompt: async (): Promise<SetupPrompt | null> => {
+    const at = base();
+    // Its own address comes with its sources: asked first when this window has not heard it yet.
+    if (!listensAt.has(at)) await api.sources().catch(() => {});
+    const p = await maybe<SetupPrompt>("/api/setup/prompt");
+    return p && { prompt: home(p.prompt, at), url: home(p.url, at), setup_url: home(p.setup_url, at) };
+  },
   storage: () => maybe<Storage>("/api/storage"),
 
   // Looking around. None of these is asked when the window opens: each
@@ -1000,13 +1089,20 @@ export const api = {
    * of no other, for connection URLs. Projects are named by the id the scan
    * gave them. The answer is the scan with what was found.
    */
-  readEnv: (projects: string[]) => post<Scan>("/api/discover/env", { projects }),
+  readEnv: async (projects: string[]) => {
+    const at = base();
+    return homedScan(await post<Scan>("/api/discover/env", { projects }, at), at);
+  },
   /** Starts a scan of what is listening, and of the folders named. It opens no env file. It replaces one under way. */
-  scanStart: (folders: string[]) => post<Scan>("/api/discover/scan", folders.length ? { folders } : {}),
+  scanStart: async (folders: string[]) => {
+    const at = base();
+    return homedScan(await post<Scan>("/api/discover/scan", folders.length ? { folders } : {}, at), at);
+  },
   /** The latest scan, held back up to `waitMs` while it is still running; null when there is none. */
   scan: async (waitMs?: number): Promise<Scan | null> => {
+    const at = base();
     try {
-      return await get<Scan>("/api/discover/scan", { wait_ms: waitMs });
+      return homedScan(await get<Scan>("/api/discover/scan", { wait_ms: waitMs }, at), at);
     } catch (e) {
       if (e instanceof ApiError && e.code === "no_scan") return null;
       throw e;
@@ -1022,10 +1118,59 @@ export const api = {
    * Whether Shipyard is on this machine, and its boxes; null from a daemon
    * that can't ask. Asking has the daemon run Shipyard's command line, which
    * starts Shipyard's own background agent when it is not running: so this
-   * is asked when a person opens the machine switcher or reaches the foot
-   * of a scan they started, and never because the window opened.
+   * is asked when a person reaches the foot of a scan they started, and
+   * never because the window opened.
    */
   shipyard: () => maybe<Shipyard>("/api/discover/shipyard"),
+
+  // Other machines (the Machines view). The first three ask a daemon by
+  // its address, whichever the window is showing, and are plain reads of
+  // that daemon. The rest go to this computer's own daemon, where
+  // Shipyard's command line is, and none of them is asked until a person
+  // opens the Add a machine dialog or acts on a machine.
+  /**
+   * Asks an address whether a Leadline answers there. Nothing answering
+   * (no forward, no daemon, or no answer within `timeoutMs`) is an answer
+   * too, not an error.
+   */
+  probe: async (at: string, timeoutMs = 4000): Promise<Probe> => {
+    try {
+      const res = await fetch(new URL("/api/health", at), { signal: AbortSignal.timeout(timeoutMs) });
+      if (!res.ok) return { state: "other" };
+      return probeOf(await res.json().catch(() => null));
+    } catch {
+      return { state: "none" };
+    }
+  },
+  summaryAt: (at: string) => get<Summary>("/api/summary", {}, at),
+  storageAt: (at: string) => maybeAt<Storage>(at, "/api/storage"),
+  /**
+   * This computer's Shipyard and its boxes; null when this computer's
+   * daemon is too old to ask. Runs `berth boxes` (the daemon keeps the
+   * answer ten seconds; `fresh` asks again), so it is asked when the Add a
+   * machine dialog opens, when "Ask again" is pressed there, and at no
+   * other time.
+   */
+  boxes: async (fresh = false): Promise<Shipyard | null> => {
+    try {
+      return await get<Shipyard>("/api/discover/shipyard", { fresh: fresh ? 1 : undefined }, localBase());
+    } catch (e) {
+      if (e instanceof ApiError && (e.status === 404 || e.status === 405)) return null;
+      throw e;
+    }
+  },
+  /**
+   * Makes sure this computer has a forward to a box's Leadline, and
+   * returns it: the one already there, or a new one on `local` (the port
+   * the machine had before) when that is free, else on another. This and
+   * forwardClose are the only requests in the app that change anything in
+   * Shipyard besides sending a task.
+   */
+  forwardOpen: (box: string, local?: number) => post<OpenedForward>("/api/shipyard/forwards", { box, local: local ?? 0 }, localBase()),
+  /** Closes a forward by Shipyard's id for it. One that is already gone is not an error. */
+  forwardClose: (id: string) => post<ClosedForward>("/api/shipyard/forwards/close", { id }, localBase()),
+  /** The forwards Shipyard holds to a box's Leadline. */
+  forwards: () => get<{ forwards: Forward[]; ports: { first: number; last: number }; checked_ms: number }>("/api/shipyard/forwards", {}, localBase()),
 
   // Sending a problem to a coding agent. Like the boxes above, none of this
   // is asked until a person opens the dialog: the brief only reads the

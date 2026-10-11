@@ -411,12 +411,13 @@ type Box struct {
 	Leadline BoxLeadline `json:"leadline"`
 }
 
-// BoxLeadline is Leadline's standing on a box. Today it is always
-// "unsupported": Leadline cannot run on a box yet. The fields are here so
-// the answer can become true without the shape changing.
+// BoxLeadline is Leadline's standing on a box. In the listing of boxes it
+// is always "unknown": listing opens nothing, and a box's Leadline is only
+// reached through a forward (forward.go). The other fields are here so the
+// listing can say more one day without the shape changing.
 type BoxLeadline struct {
-	// State is "unsupported" now; later "missing", "installed",
-	// "reachable".
+	// State is "unknown" now ("unsupported" from a daemon older than the
+	// forwards); later "missing", "installed", "reachable".
 	State     string `json:"state"`
 	Installed bool   `json:"installed"`
 	Reachable bool   `json:"reachable"`

@@ -1,10 +1,10 @@
 import { useEffect, useId, useRef, useState, type ComponentType, type ReactNode } from "react";
 import { BoxIcon, CheckIcon, CircleAlertIcon, DatabaseIcon, EyeIcon, EyeOffIcon, RadioIcon, ScanSearchIcon, SquareTerminalIcon, ZapIcon } from "lucide-react";
-import { api, ApiError, base, type Connection, type Fault, type Run, type Sources, type TestResult } from "@/lib/api";
+import { api, ApiError, ownBase, type Connection, type Fault, type Run, type Sources, type TestResult } from "@/lib/api";
 import { hidden, masked, urlKind, withPassword } from "@/lib/connurl";
 import { fmtCount, fmtMs } from "@/lib/format";
 import { useMachine } from "@/lib/live";
-import { LOCAL_ID } from "@/lib/machines";
+import { hereOf, LOCAL_ID } from "@/lib/machines";
 import { captureWord, kindName, kindVersion, QUIET_AFTER_MS, signals, versionOf } from "@/lib/sources";
 import { cn } from "@/lib/utils";
 import type { AddKind } from "@/components/Sidebar";
@@ -26,6 +26,17 @@ const KINDS: { kind: AddKind; label: string; icon: Icon }[] = [
 ];
 
 const isDb = (k: AddKind): k is "postgres" | "redis" => k === "postgres" || k === "redis";
+
+/**
+ * useHere is the machine whose daemon the window shows, as a sentence says
+ * it: "this Mac", or the name of another. A source is added to that
+ * machine's Leadline, so its apps and databases are that machine's, and
+ * what is copied from here is run there. `away` says it is another machine.
+ */
+function useHere(): { here: string; away: boolean } {
+  const machine = useMachine();
+  return { here: hereOf(machine), away: machine.id !== LOCAL_ID };
+}
 
 // Where a daemon listens unless told otherwise: `leadline run` and an
 // OpenTelemetry SDK need telling only when this one is somewhere else.
@@ -65,6 +76,7 @@ export function AddSource({ open, kind, onClose, onChanged, onStats, onLook, loo
 
 /** AddSourcePanel is the dialog's inside, which is also the first-run screen. `className` sets its height: one height for every kind, so picking another doesn't move the dialog. */
 export function AddSourcePanel({ kind: first, className, onLook, lookNote, ...rest }: PanelProps & { className?: string }) {
+  const { here } = useHere();
   // `n` goes up when a kind is picked by hand, which starts its form afresh.
   // A URL that turns out to be for the other database moves the highlight
   // and keeps what was typed.
@@ -95,10 +107,11 @@ export function AddSourcePanel({ kind: first, className, onLook, lookNote, ...re
         <p className="px-2.5 pt-3 text-[11.5px] leading-snug text-muted-foreground">MySQL and MongoDB are seen through OpenTelemetry for now.</p>
         {onLook ? (
           <div className="mt-auto flex flex-col gap-1.5 border-t px-0.5 pt-2.5">
-            <p className="px-2 text-[11.5px] leading-snug text-pretty text-muted-foreground">Not sure what you have? Leadline can list the projects running here. It opens no env file unless you tick its project.</p>
-            <Button variant="outline" size="sm" onClick={onLook} className="w-full justify-start font-normal">
+            <p className="px-2 text-[11.5px] leading-snug text-pretty text-muted-foreground">Not sure what you have? Leadline can list the projects running on {here}. It opens no env file unless you tick its project.</p>
+            {/* A machine's name can be longer than the column: the button grows a line for it. */}
+            <Button variant="outline" size="sm" onClick={onLook} className="h-auto min-h-8 w-full justify-start py-1 text-left font-normal whitespace-normal sm:h-auto sm:min-h-7">
               <ScanSearchIcon />
-              Look around this Mac
+              <span className="min-w-0 break-words">Look around {here}</span>
             </Button>
           </div>
         ) : (
@@ -162,12 +175,10 @@ const faultOf = (e: unknown): Fault => (e instanceof ApiError ? { code: e.code, 
 // What capture does and costs, before the daemon has seen the URL. Once it
 // has (a test, or the saved connection) its own note is shown instead: it
 // knows whether this server can be captured at all.
-const CAPTURE_NOTE = {
-  postgres:
-    "Your app reaches Postgres through a port Leadline opens on this Mac, so each statement is recorded with its timing and who ran it. Only for a database on this machine.",
-  redis:
-    "Leadline has Redis report every command it runs (MONITOR). That can cost a busy server up to half its throughput, and commands are recorded with when they ran but not how long they took. Only for a Redis on this machine.",
-};
+const captureNote = (kind: "postgres" | "redis", here: string, away: boolean) =>
+  kind === "postgres"
+    ? `Your app reaches Postgres through a port Leadline opens on ${here}, so each statement is recorded with its timing and who ran it. Only for a database on ${away ? `${here} itself` : "this machine"}.`
+    : `Leadline has Redis report every command it runs (MONITOR). That can cost a busy server up to half its throughput, and commands are recorded with when they ran but not how long they took. Only for a Redis on ${away ? `${here} itself` : "this machine"}.`;
 const PLACEHOLDER = { postgres: "postgres://user:password@localhost:5432/dbname", redis: "redis://localhost:6379" };
 // A Postgres is worth capturing from the start; a Redis pays for it, so that is the person's call.
 const CAPTURE_FIRST = { postgres: true, redis: false };
@@ -176,6 +187,7 @@ type Tested = { url: string; busy: boolean; result?: TestResult; fault?: Fault }
 
 function DbForm({ kind, onKind, onChanged, onStats, onClose, heading }: Omit<PanelProps, "kind"> & { kind: "postgres" | "redis"; onKind: (k: "postgres" | "redis") => void }) {
   const id = useId();
+  const { here, away } = useHere();
   // The URL as typed, password and all. It lives here and nowhere else: not
   // in storage, not in any state above this form.
   const [url, setUrl] = useState("");
@@ -247,7 +259,7 @@ function DbForm({ kind, onKind, onChanged, onStats, onClose, heading }: Omit<Pan
     if (fault) faultRef.current?.scrollIntoView({ block: "nearest" });
   }, [fault]);
 
-  if (saved) return <Saved conn={saved} typed={url} onStats={onStats} onClose={onClose} heading={heading} />;
+  if (saved) return <Saved conn={saved} typed={url} here={here} onStats={onStats} onClose={onClose} heading={heading} />;
 
   return (
     <form
@@ -296,7 +308,7 @@ function DbForm({ kind, onKind, onChanged, onStats, onClose, heading }: Omit<Pan
             </Said>
           ) : result.result?.ok ? (
             <>
-              <Said ok>{connectedLine(result.result)}</Said>
+              <Said ok>{connectedLine(result.result, here)}</Said>
               {result.result.pg_stat_statements && !result.result.pg_stat_statements.available && (
                 <Small className="pl-[22px]">Per-query totals (pg_stat_statements) are off on this server. Its stats say how to turn them on.</Small>
               )}
@@ -331,7 +343,7 @@ function DbForm({ kind, onKind, onChanged, onStats, onClose, heading }: Omit<Pan
             <label htmlFor={`${id}-capture`}>{can ? `Capture every ${word}` : `Can't capture every ${word}`}</label>
             <Small>
               <span id={`${id}-capture-note`} role={no ? "alert" : undefined}>
-                {no ? `${no.message} ${no.hint ?? ""}` : (offer?.note ?? CAPTURE_NOTE[kind])}
+                {no ? `${no.message} ${no.hint ?? ""}` : (offer?.note ?? captureNote(kind, here, away))}
               </span>
             </Small>
           </div>
@@ -373,15 +385,15 @@ function DbForm({ kind, onKind, onChanged, onStats, onClose, heading }: Omit<Pan
   );
 }
 
-function connectedLine(r: TestResult): string {
+function connectedLine(r: TestResult, here: string): string {
   const what = kindVersion(r.kind, versionOf(r));
-  const where = r.remote ? `at ${r.host}` : "on this Mac";
+  const where = r.remote ? `at ${r.host}` : `on ${here}`;
   const took = r.latency_ms != null ? `, answering in ${fmtMs(r.latency_ms)}` : "";
   return `Connected. ${what} ${where}${took}${r.tls ? ", over TLS" : ""}.`;
 }
 
 /** Saved is the form after the connection was added: what to change in the app, and the wait for its first query. */
-function Saved({ conn, typed, onStats, onClose, heading }: { conn: Connection; typed: string } & Pick<PanelProps, "onStats" | "onClose" | "heading">) {
+function Saved({ conn, typed, here, onStats, onClose, heading }: { conn: Connection; typed: string; here: string } & Pick<PanelProps, "onStats" | "onClose" | "heading">) {
   const word = captureWord(conn.kind);
   const proxyUrl = conn.proxy?.url ? withPassword(conn.proxy.url, typed) : "";
   const line = `DATABASE_URL=${proxyUrl}`;
@@ -391,7 +403,7 @@ function Saved({ conn, typed, onStats, onClose, heading }: { conn: Connection; t
       <div className="flex flex-col gap-1">
         <Said ok>
           Saved as <span className="font-medium">{conn.name}</span>.{" "}
-          {conn.health.state === "ok" ? `${kindVersion(conn.kind, versionOf(conn.health))} ${conn.remote ? `at ${conn.host}` : "on this Mac"} answers.` : ""}
+          {conn.health.state === "ok" ? `${kindVersion(conn.kind, versionOf(conn.health))} ${conn.remote ? `at ${conn.host}` : `on ${here}`} answers.` : ""}
         </Said>
         {conn.health.state === "error" && (
           <Said ok={false} hint={conn.health.hint}>
@@ -557,7 +569,7 @@ function WaitForApp({ runs }: { runs?: boolean }) {
   );
 }
 
-/** useAddress is where an app should send OpenTelemetry: what the daemon says, or its own address until it has. */
+/** useAddress is where an app should send OpenTelemetry: what the daemon says, or its own address until it has. Both are addresses on the daemon's machine, where the app runs. */
 function useAddress(): string {
   const machine = useMachine();
   const [at, setAt] = useState<string | null>(null);
@@ -571,7 +583,7 @@ function useAddress(): string {
       alive = false;
     };
   }, [machine.url]);
-  return at ?? base();
+  return at ?? ownBase();
 }
 
 /** runLine is `leadline run` in front of a command, told where the daemon is when that isn't the usual place. */
@@ -629,22 +641,24 @@ function Done({ onClose }: Pick<PanelProps, "onClose">) {
 type StepProps = Omit<PanelProps, "kind">;
 
 function AppSteps({ onOtel, onClose, heading }: StepProps & { onOtel: () => void }) {
-  const daemon = base();
+  // The command is run on the daemon's machine: it names the daemon as that machine reaches it, never a port forwarded to this one.
+  const daemon = ownBase();
+  const { here, away } = useHere();
   return (
     <div className="flex min-h-0 flex-1 flex-col gap-4">
       {heading("Add your app")}
       <AgentPrompt>
         {(line) => (
           <Block label="Have your coding agent do it">
-            <Small>Paste this into Claude Code, Codex or Cursor in the project. It wires the dev setup and checks that data arrives.</Small>
+            <Small>Paste this into Claude Code, Codex or Cursor in the project{away ? ` on ${here}` : ""}. It wires the dev setup and checks that data arrives.</Small>
             {line}
           </Block>
         )}
       </AgentPrompt>
-      <Block label="Or put it in front of your dev command">
+      <Block label={away ? `Or put it in front of your dev command, on ${here}` : "Or put it in front of your dev command"}>
         <CopyLine text={runLine("pnpm dev", daemon)} label="Copy the command" />
         <Small>
-          Use your own command in place of <Code>pnpm dev</Code>. Its output becomes logs, it is set up to send traces, and a Postgres on this Mac is reached through a proxy that records its queries.
+          Use your own command in place of <Code>pnpm dev</Code>. Its output becomes logs, it is set up to send traces, and a Postgres on {here} is reached through a proxy that records its queries.
         </Small>
       </Block>
       <Small>
@@ -662,11 +676,12 @@ function AppSteps({ onOtel, onClose, heading }: StepProps & { onOtel: () => void
 
 function OtelSteps({ onClose, heading }: StepProps) {
   const at = useAddress();
+  const { here, away } = useHere();
   const env = `OTEL_EXPORTER_OTLP_ENDPOINT=${at}\nOTEL_EXPORTER_OTLP_PROTOCOL=http/protobuf\nOTEL_SERVICE_NAME=my-app`;
   return (
     <div className="flex min-h-0 flex-1 flex-col gap-4">
       {heading("Send OpenTelemetry")}
-      <Block label="Where to send">
+      <Block label={away ? `Where to send, from an app on ${here}` : "Where to send"}>
         <CopyLine text={at} label="Copy the OpenTelemetry address" />
         <Small>
           OTLP over HTTP, as protobuf or JSON: traces to <Code>/v1/traces</Code>, logs to <Code>/v1/logs</Code>, metrics to <Code>/v1/metrics</Code>.
@@ -685,13 +700,14 @@ function OtelSteps({ onClose, heading }: StepProps) {
 }
 
 function RunSteps({ onClose, heading }: StepProps) {
-  const daemon = base();
+  const daemon = ownBase();
+  const { here, away } = useHere();
   return (
     <div className="flex min-h-0 flex-1 flex-col gap-4">
       {heading("Run a dev command")}
-      <Block label="Put leadline run in front of the command you already use">
+      <Block label={away ? `On ${here}, put leadline run in front of the command you already use` : "Put leadline run in front of the command you already use"}>
         <CopyLine text={runLine("pnpm dev", daemon)} label="Copy the command" />
-        <Small>Every line it prints becomes a log, it is set up to send its traces, and a Postgres on this Mac is reached through a proxy that records its queries. It stops when the command does.</Small>
+        <Small>Every line it prints becomes a log, it is set up to send its traces, and a Postgres on {here} is reached through a proxy that records its queries. It stops when the command does.</Small>
       </Block>
       <Block label="To name it yourself">
         <CopyLine text={runLine("go run ./cmd/api", daemon).replace("leadline run ", "leadline run --name api ")} label="Copy the command with a name" />
@@ -724,7 +740,7 @@ export function FirstRun({ kind = "app", arrived, onGo, onChanged, onStats, onLo
                 "The first data has arrived. The views are filling in."
               ) : (
                 <>
-                  {machine.id === LOCAL_ID ? "Leadline is running, and nothing has reached it yet." : `The daemon on ${machine.name} is running, and nothing has reached it yet.`} Pick what you have, or run <Code>leadline demo</Code> to see made-up data.
+                  {machine.id === LOCAL_ID ? "Leadline is running, and nothing has reached it yet." : `Leadline is running on ${machine.name}, and nothing has reached it there yet.`} Pick what you have{machine.id === LOCAL_ID ? "" : " on that machine"}, or run <Code>leadline demo</Code>{machine.id === LOCAL_ID ? "" : " there"} to see made-up data.
                 </>
               )}
             </p>

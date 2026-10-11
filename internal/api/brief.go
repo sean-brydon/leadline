@@ -27,8 +27,9 @@ import (
 //
 // The briefs only read the store. The two targets routes run Shipyard's
 // command line, reading only. The last is the one route in the daemon
-// that starts anything anywhere else, and it does so once, for the
-// request it was sent.
+// that starts a coding agent, and it does so once, for the request it was
+// sent. (The forward routes in discover.go are the only others that
+// change anything outside Leadline.)
 func (s *Server) briefRoutes(mux *http.ServeMux, d *discover.Service) {
 	b := brief.New(s.store)
 

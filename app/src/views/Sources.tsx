@@ -1,8 +1,9 @@
 import { useState, type ComponentType, type ReactNode } from "react";
 import { BoxIcon, DatabaseIcon, EllipsisIcon, ZapIcon } from "lucide-react";
-import { api, base, type Connection, type ConnectionStats as Stats, type Series, type Sources as SourcesData } from "@/lib/api";
+import { api, ownBase, type Connection, type ConnectionStats as Stats, type Series, type Sources as SourcesData } from "@/lib/api";
 import { fmtAgo, fmtBytes, fmtCount, fmtFor, fmtSpan } from "@/lib/format";
-import { useEvery, useLive } from "@/lib/live";
+import { useEvery, useLive, useMachine } from "@/lib/live";
+import { hereOf, LOCAL_ID } from "@/lib/machines";
 import type { Kept } from "@/lib/kept";
 import { ALL, scopeOf, type Source } from "@/lib/scope";
 import { captureWord, connProblem, kindVersion, listed, ownerLine, signals, versionOf, windowed, type AppRow, type DbRow, type Model } from "@/lib/sources";
@@ -309,7 +310,8 @@ function DbLine({ row, wide, on, nowMs, onOpen, onSource, onChanged, onRemove }:
   const capture = useCapture(c, onChanged);
   const problem = connProblem(c);
   const word = captureWord(c.kind);
-  const where = c.remote ? `at ${c.host}` : "on this Mac";
+  const here = hereOf(useMachine());
+  const where = c.remote ? `at ${c.host}` : `on ${here}`;
   // A database that isn't captured has nothing in Leadline's own store to
   // count, so its row shows what the server says about itself. That is asked
   // of the database, so it is asked seldom, and only while this page is up.
@@ -490,7 +492,11 @@ function Remove({ conn, onClose, onRemoved }: { conn: Connection | null; onClose
 
 /** Rail is the column beside the table: how to add an app, where to send, and what is kept. */
 function Rail({ sources, kept }: { sources: SourcesData; kept: Kept }) {
-  const daemon = base();
+  // What is copied from here is used on the daemon's machine: it names the daemon as that machine reaches it, never a port forwarded to this one.
+  const daemon = ownBase();
+  const machine = useMachine();
+  const here = hereOf(machine);
+  const away = machine.id !== LOCAL_ID;
   const otlp = sources.otlp.endpoints.length ? sources.otlp.endpoints : [daemon];
   return (
     <aside aria-label="Adding and keeping" className="flex w-full shrink-0 flex-col gap-3 @4xl:w-[320px]">
@@ -498,15 +504,15 @@ function Rail({ sources, kept }: { sources: SourcesData; kept: Kept }) {
         <AgentPrompt>
           {(line) => (
             <>
-              <p className="text-muted-foreground">Paste this into Claude Code, Codex or Cursor in the project. It wires the dev setup and checks that data arrives.</p>
+              <p className="text-muted-foreground">Paste this into Claude Code, Codex or Cursor in the project{away ? ` on ${here}` : ""}. It wires the dev setup and checks that data arrives.</p>
               {line}
-              <p className="pt-1 text-muted-foreground">Or put it in front of your dev command:</p>
+              <p className="pt-1 text-muted-foreground">Or put it in front of your dev command{away ? ` there` : ""}:</p>
             </>
           )}
         </AgentPrompt>
         <CopyLine text={runLine("pnpm dev", daemon)} label="Copy the command" />
       </Card>
-      <Card title="Where to send">
+      <Card title={away ? `Where to send, on ${here}` : "Where to send"}>
         <p className="text-[11.5px] text-muted-foreground">OpenTelemetry, over HTTP</p>
         {otlp.map((at, i) => (
           <CopyLine key={at} text={at} label={i === 0 ? "Copy the OpenTelemetry address" : "Copy the standard-port OpenTelemetry address"} />
@@ -514,7 +520,7 @@ function Rail({ sources, kept }: { sources: SourcesData; kept: Kept }) {
         <p className="pt-1 text-[11.5px] text-muted-foreground">For coding agents (MCP)</p>
         <CopyLine text={`${daemon}/mcp`} label="Copy the MCP address" />
       </Card>
-      <Card title="Kept on this machine">
+      <Card title={`Kept on ${here}`}>
         {kept.full !== null && (
           <div className="flex items-center gap-2.5 py-0.5">
             <Meter value={kept.full} label="How full the store is against its size cap" />

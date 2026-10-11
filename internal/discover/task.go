@@ -18,11 +18,12 @@ import (
 //	berth agents BOX --json    the agent CLIs a box can start; reads only
 //	berth task new BOX/PROJECT/NAME --agent ID --open tab [--base REF] --json --prompt=TEXT
 //
-// The second is the one command Leadline runs that changes anything in
-// Shipyard: it makes a worktree and starts an agent in it. It is run from
-// StartTask and nowhere else, and StartTask is called by one route, when a
-// person presses Send. Nothing here retries, and nothing runs it on a
-// timer or because data arrived.
+// The second changes something in Shipyard: it makes a worktree and starts
+// an agent in it. It is run from StartTask and nowhere else, and StartTask
+// is called by one route, when a person presses Send. Nothing here
+// retries, and nothing runs it on a timer or because data arrived. (The
+// only other commands that change anything there open and close a forward
+// to a box's Leadline: forward.go.)
 
 // Agent is an agent CLI a box can start.
 type Agent struct {

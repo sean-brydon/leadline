@@ -151,10 +151,11 @@ func TestShipyardBoxes(t *testing.T) {
 	if !local.Local {
 		t.Errorf("local box = %+v", local)
 	}
-	// Leadline can't be on a box yet, and every box says so in a shape
-	// that can later say otherwise.
+	// Listing the boxes opens nothing, so it does not know whether
+	// Leadline is on one, and every box says so in a shape that can later
+	// say more.
 	for _, b := range got.Boxes {
-		if b.Leadline.State != "unsupported" || b.Leadline.Installed || b.Leadline.Reachable || b.Leadline.URL != "" || b.Leadline.Note == "" {
+		if b.Leadline.State != "unknown" || b.Leadline.Installed || b.Leadline.Reachable || b.Leadline.URL != "" || b.Leadline.Note == "" {
 			t.Errorf("%s leadline = %+v", b.Name, b.Leadline)
 		}
 	}
@@ -164,7 +165,7 @@ func TestShipyardBoxes(t *testing.T) {
 			t.Errorf("the listing passes on %q", never)
 		}
 	}
-	if !strings.Contains(string(raw), `"leadline":{"state":"unsupported","installed":false,"reachable":false,`) {
+	if !strings.Contains(string(raw), `"leadline":{"state":"unknown","installed":false,"reachable":false,`) {
 		t.Errorf("leadline's fields are not all there: %s", raw)
 	}
 

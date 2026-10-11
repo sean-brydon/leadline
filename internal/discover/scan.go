@@ -79,6 +79,12 @@ type Options struct {
 	BerthTimeout time.Duration
 	// TaskTimeout is how long starting a Shipyard task may take.
 	TaskTimeout time.Duration
+	// ForwardPorts is the range a forward's local port is picked from, and
+	// PortFree whether one is free. Left out, the range is 14320 to 14339
+	// (or LEADLINE_FORWARD_PORTS) and a port is free when nothing on this
+	// computer listens there.
+	ForwardPorts PortRange
+	PortFree     func(port int) bool
 	// SecretsFor is how long found URLs are kept after a scan.
 	SecretsFor time.Duration
 }
@@ -137,7 +143,13 @@ func New(opts Options) *Service {
 		s.ship.find = opts.Berth
 	}
 	if opts.BerthTimeout > 0 {
-		s.ship.boxesTimeout, s.ship.locationsTimeout = opts.BerthTimeout, opts.BerthTimeout
+		s.ship.boxesTimeout, s.ship.locationsTimeout, s.ship.forwardTimeout = opts.BerthTimeout, opts.BerthTimeout, opts.BerthTimeout
+	}
+	if opts.ForwardPorts.First > 0 && opts.ForwardPorts.Last >= opts.ForwardPorts.First {
+		s.ship.ports = opts.ForwardPorts
+	}
+	if opts.PortFree != nil {
+		s.ship.free = opts.PortFree
 	}
 	if opts.TaskTimeout > 0 {
 		s.ship.taskTimeout = opts.TaskTimeout
@@ -191,8 +203,8 @@ type ScanOptions struct {
 	// Folders a person pointed at. Without any, the scan is of what is
 	// listening and of the `leadline run` commands seen.
 	Folders []string
-	// Daemon is the daemon's address as the app reached it, for the
-	// advice that names it.
+	// Daemon is the daemon's own address, for the advice that names it:
+	// where it listens, not a port forwarded to it from another computer.
 	Daemon string
 }
 
